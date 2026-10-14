@@ -95,15 +95,20 @@ final class AppleSpeechEngine: SpeechEngine {
             let ok = try await AssetInventory.reserve(locale: locale)
             trace?("Reservieren \(locale.identifier(.bcp47)) → \(ok)")
         }
-        if let request = try await AssetInventory.assetInstallationRequest(supporting: [transcriber]) {
-            trace?("Lade Sprachpaket …")
-            try await request.downloadAndInstall()
+        let unsupported = FluesterError("Apple SpeechAnalyzer wird auf diesem Mac für „\(locale.identifier)“ nicht unterstützt – Whisper lokal oder Cloud wählen")
+        do {
+            if let request = try await AssetInventory.assetInstallationRequest(supporting: [transcriber]) {
+                trace?("Lade Sprachpaket …")
+                try await request.downloadAndInstall()
+            }
+        } catch {
+            // Auf nicht unterstützter Hardware (z. B. virtuelle Macs) kommt nur ein kryptisches "not subscribed"
+            if await AssetInventory.status(forModules: [transcriber]) == .unsupported { throw unsupported }
+            throw error
         }
         let after = await AssetInventory.status(forModules: [transcriber])
         trace?("Status nachher: \(after)")
-        if after == .unsupported {
-            throw FluesterError("Apple-Sprachpaket für „\(locale.identifier)“ gibt es auf diesem Mac nicht – Whisper oder Cloud wählen")
-        }
+        if after == .unsupported { throw unsupported }
     }
 
     /// Für die Einstellungen: Sprachpaket vorab laden.

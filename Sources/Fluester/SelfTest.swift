@@ -47,6 +47,7 @@ enum SelfTest {
         // 3) Geräte und Berechtigungen (in der CI meist leer/aus)
         log("Mikrofone: \(AudioDevices.inputs().map(\.name))")
         log("Bedienungshilfen: \(Permissions.accessibility ? "erlaubt" : "nicht erlaubt")")
+        log("Spracherkennung: \(Permissions.speechRecognitionGranted ? "erlaubt" : Permissions.speechRecognitionUndetermined ? "nicht gefragt" : "nicht erlaubt")")
         log("Apple Intelligence: \(Rewriters.appleIntelligenceProblem() ?? "verfügbar")")
 
         // 4) Sprache erzeugen
