@@ -1,5 +1,14 @@
+# macOS (Swift)
 .build/
 build/
 .swiftpm/
 *.xcodeproj/
 Package.resolved
+# .NET (Windows, Linux, gemeinsame Logik)
+bin/
+obj/
+*.user
+.vs/
+TestResults/
+publish/
+dist/

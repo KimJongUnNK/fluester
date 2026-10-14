@@ -1,10 +1,18 @@
-name: CI
+name: macOS
 
 on:
   push:
     branches: [main]
+    paths: ["macos/**", "scripts/install.sh", ".github/workflows/macos.yml"]
   pull_request:
+    paths: ["macos/**", "scripts/install.sh", ".github/workflows/macos.yml"]
   workflow_dispatch:
+  workflow_call:
+    inputs:
+      version:
+        description: "Versionsnummer für das Paket"
+        type: string
+        required: false
 
 permissions:
   contents: read
@@ -14,6 +22,9 @@ jobs:
     name: Testen, bauen, Selbsttest
     runs-on: macos-26
     timeout-minutes: 30
+    defaults:
+      run:
+        working-directory: macos
     steps:
       - uses: actions/checkout@v4
 
@@ -27,7 +38,7 @@ jobs:
         run: swift test
 
       - name: App bauen
-        run: VERSION="0.0.${{ github.run_number }}" BUILD="${{ github.run_number }}" ./scripts/build-app.sh
+        run: VERSION="${{ inputs.version || format('0.0.{0}', github.run_number) }}" BUILD="${{ github.run_number }}" ./scripts/build-app.sh
 
       - name: Bundle prüfen
         run: |
@@ -51,9 +62,10 @@ jobs:
             exit 1
           }
 
-      - name: Installer testen (installieren, starten, läuft?)
+      - name: Installer testen (installieren, starten, läuft?, deinstallieren)
+        working-directory: .
         run: |
-          FLUESTER_ZIP=build/Fluester-macOS.zip bash scripts/install.sh
+          FLUESTER_ZIP=macos/build/Fluester-macOS.zip bash scripts/install.sh
           test -x "/Applications/Flüster.app/Contents/MacOS/Fluester"
           sleep 6
           pgrep -x Fluester >/dev/null && echo "✓ Flüster läuft nach dem Start" || { echo "✗ Flüster läuft nicht"; exit 1; }
@@ -64,6 +76,6 @@ jobs:
       - uses: actions/upload-artifact@v4
         with:
           name: Fluester-macOS
-          path: build/Fluester-macOS.zip
+          path: macos/build/Fluester-macOS.zip
           if-no-files-found: error
           retention-days: 14

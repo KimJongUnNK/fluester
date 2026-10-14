@@ -1,0 +1,140 @@
+name: Windows & Linux
+
+on:
+  push:
+    branches: [main]
+    paths: ["dotnet/**", "windows/**", "linux/**", "scripts/**", "Fluester.sln", ".github/workflows/dotnet.yml"]
+  pull_request:
+    paths: ["dotnet/**", "windows/**", "linux/**", "scripts/**", "Fluester.sln", ".github/workflows/dotnet.yml"]
+  workflow_dispatch:
+  workflow_call:
+    inputs:
+      version:
+        description: "Versionsnummer für das Paket"
+        type: string
+        required: false
+
+permissions:
+  contents: read
+
+env:
+  DOTNET_NOLOGO: "1"
+  DOTNET_CLI_TELEMETRY_OPTOUT: "1"
+  SAMPLE_WAV: https://raw.githubusercontent.com/ggml-org/whisper.cpp/master/samples/jfk.wav
+  BASE_MODEL: https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-base.bin
+
+jobs:
+  linux:
+    name: Linux – Tests, Pakete, Selbsttest
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "10.0.x"
+
+      - name: Tests (gemeinsame Logik)
+        run: dotnet test dotnet/Fluester.Core.Tests -c Release
+
+      - name: Pakete bauen (x64 + arm64)
+        run: |
+          scripts/package-dotnet.sh linux-x64 "${{ inputs.version || format('0.0.{0}', github.run_number) }}" dist
+          scripts/package-dotnet.sh linux-arm64 "${{ inputs.version || format('0.0.{0}', github.run_number) }}" dist
+          file dist/linux-arm64/fluester
+
+      - name: Testumgebung (uinput, Xvfb, Zwischenablage, Sprache, Modell)
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq xvfb xauth xclip xdotool espeak-ng
+          sudo modprobe uinput
+          ls -la /dev/uinput
+          mkdir -p "$RUNNER_TEMP/fhome/models"
+          curl -sSL --retry 3 -o "$RUNNER_TEMP/fhome/models/ggml-base.bin" "$BASE_MODEL"
+          curl -sSL --retry 3 -o "$RUNNER_TEMP/jfk.wav" "$SAMPLE_WAV"
+
+      - name: Selbsttest (Taste über uinput/evdev, Zwischenablage, echte Spracherkennung)
+        timeout-minutes: 10
+        run: |
+          sudo -E env "PATH=$PATH" \
+            FLUESTER_HOME="$RUNNER_TEMP/fhome" \
+            FLUESTER_SELFTEST_INPUT=1 FLUESTER_SELFTEST_CLIPBOARD=1 \
+            FLUESTER_SELFTEST_WHISPER=base FLUESTER_SELFTEST_WAV="$RUNNER_TEMP/jfk.wav" FLUESTER_SELFTEST_EXPECT=country \
+            xvfb-run -a dist/linux-x64/fluester selftest
+
+      - name: Installer testen
+        run: |
+          FLUESTER_TARBALL=dist/Fluester-Linux-x64.tar.gz FLUESTER_NO_SETUP=1 bash scripts/install.sh
+          ~/.local/bin/fluester version
+          ~/.local/bin/fluester help | head -3
+          bash scripts/install.sh --uninstall
+          test ! -e ~/.local/bin/fluester
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Fluester-Linux
+          path: dist/Fluester-Linux-*.tar.gz
+          if-no-files-found: error
+          retention-days: 14
+
+  windows:
+    name: Windows – Tests, Paket, Selbsttest
+    runs-on: windows-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "10.0.x"
+
+      - name: Tests (gemeinsame Logik)
+        run: dotnet test dotnet/Fluester.Core.Tests -c Release
+
+      - name: Paket bauen
+        shell: pwsh
+        run: ./scripts/package-windows.ps1 -Version "${{ inputs.version || format('0.0.{0}', github.run_number) }}" -Out dist
+
+      - name: Modell und Testaudio
+        shell: pwsh
+        run: |
+          $models = Join-Path $env:LOCALAPPDATA 'Fluester\models'
+          New-Item -ItemType Directory -Force -Path $models | Out-Null
+          Invoke-WebRequest $env:BASE_MODEL -OutFile (Join-Path $models 'ggml-base.bin')
+          Invoke-WebRequest $env:SAMPLE_WAV -OutFile "$env:RUNNER_TEMP\jfk.wav"
+
+      - name: Selbsttest (Taste, Einfügen, DPAPI, Autostart, Leiste, echte Spracherkennung)
+        shell: pwsh
+        timeout-minutes: 10
+        run: |
+          $env:FLUESTER_SELFTEST_WHISPER = 'base'
+          $env:FLUESTER_SELFTEST_WAV = "$env:RUNNER_TEMP\jfk.wav"
+          $env:FLUESTER_SELFTEST_EXPECT = 'country'
+          $env:FLUESTER_SELFTEST_INSERT = '1'
+          $env:FLUESTER_SELFTEST_LOG = "$env:RUNNER_TEMP\selftest.txt"
+          $p = Start-Process -FilePath dist\win-x64\Fluester.exe -ArgumentList '--selftest' -Wait -PassThru -NoNewWindow
+          Get-Content $env:FLUESTER_SELFTEST_LOG -Encoding UTF8
+          if ($p.ExitCode -ne 0) { Write-Host "Exit $($p.ExitCode)"; Get-Content "$env:LOCALAPPDATA\Fluester\fluester.log" -Tail 40 -ErrorAction SilentlyContinue; exit 1 }
+
+      - name: Installer testen (installieren, starten, läuft?, deinstallieren)
+        shell: pwsh
+        run: |
+          $env:FLUESTER_ZIP = (Resolve-Path dist\Fluester-Windows-x64.zip).Path
+          $env:FLUESTER_NO_START = '1'
+          & .\scripts\install.ps1
+          $exe = Join-Path $env:LOCALAPPDATA 'Programs\Fluester\Fluester.exe'
+          if (-not (Test-Path $exe)) { throw 'nicht installiert' }
+          if (-not (Test-Path 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\Fluester')) { throw 'kein Eintrag unter Apps' }
+          Start-Process $exe -ArgumentList '--background'
+          Start-Sleep -Seconds 8
+          $proc = Get-Process -Name Fluester -ErrorAction SilentlyContinue
+          if (-not $proc) { Get-Content "$env:LOCALAPPDATA\Fluester\fluester.log" -Tail 30 -ErrorAction SilentlyContinue; throw 'Fluester laeuft nicht' }
+          Write-Host "OK Fluester laeuft (PID $($proc.Id))"
+          & .\scripts\install.ps1 -Uninstall
+          if (Test-Path $exe) { throw 'nicht entfernt' }
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Fluester-Windows
+          path: dist/Fluester-Windows-x64.zip
+          if-no-files-found: error
+          retention-days: 14

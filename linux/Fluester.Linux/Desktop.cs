@@ -1,0 +1,329 @@
+using System.Diagnostics;
+using System.Text;
+using System.Text.Json;
+using Fluester.Core;
+using Fluester.Engine;
+
+namespace Fluester.Linux;
+
+/// <summary>Anbindung an den Desktop über Standard-Werkzeuge: Zwischenablage (wl-copy/xclip/xsel), aktives Fenster
+/// (xdotool, hyprctl, swaymsg), Benachrichtigungen (notify-send), Töne (pw-play/paplay/aplay).</summary>
+static class Desktop
+{
+    public static bool Wayland => !string.IsNullOrEmpty(Environment.GetEnvironmentVariable("WAYLAND_DISPLAY"));
+    public static bool X11 => !Wayland && !string.IsNullOrEmpty(Environment.GetEnvironmentVariable("DISPLAY"));
+    public static string Session => Wayland ? "Wayland" : X11 ? "X11" : "keine grafische Sitzung";
+    public static string DesktopName => Environment.GetEnvironmentVariable("XDG_CURRENT_DESKTOP") ?? "?";
+
+    /// <summary>Unter systemd/Autostart fehlt manchmal die Grafik-Umgebung – aus /run/user ableiten.</summary>
+    public static void RepairEnvironment()
+    {
+        var runtime = Environment.GetEnvironmentVariable("XDG_RUNTIME_DIR") ?? $"/run/user/{Libc.geteuid()}";
+        if (string.IsNullOrEmpty(Environment.GetEnvironmentVariable("XDG_RUNTIME_DIR")) && Directory.Exists(runtime))
+            Environment.SetEnvironmentVariable("XDG_RUNTIME_DIR", runtime);
+        if (string.IsNullOrEmpty(Environment.GetEnvironmentVariable("WAYLAND_DISPLAY")) && string.IsNullOrEmpty(Environment.GetEnvironmentVariable("DISPLAY")))
+        {
+            var wl = Directory.Exists(runtime) ? Directory.GetFiles(runtime, "wayland-*").FirstOrDefault(f => !f.EndsWith(".lock")) : null;
+            if (wl != null) Environment.SetEnvironmentVariable("WAYLAND_DISPLAY", Path.GetFileName(wl));
+            else if (Directory.Exists("/tmp/.X11-unix") && Directory.GetFileSystemEntries("/tmp/.X11-unix").Length > 0) Environment.SetEnvironmentVariable("DISPLAY", ":0");
+        }
+    }
+
+    // ───────────── Werkzeuge
+
+    static readonly Dictionary<string, string?> found = new();
+
+    public static string? Which(string tool)
+    {
+        lock (found)
+        {
+            if (found.TryGetValue(tool, out var p)) return p;
+            foreach (var dir in (Environment.GetEnvironmentVariable("PATH") ?? "/usr/bin:/bin").Split(':').Append("/usr/bin").Append("/usr/local/bin"))
+            {
+                var f = Path.Combine(dir, tool);
+                if (File.Exists(f)) return found[tool] = f;
+            }
+            return found[tool] = null;
+        }
+    }
+
+    public static (int Code, string Out, string Err) Run(string file, IEnumerable<string> args, string? stdin = null, int timeoutMs = 4000)
+    {
+        var psi = new ProcessStartInfo(file)
+        {
+            RedirectStandardOutput = true, RedirectStandardError = true, RedirectStandardInput = stdin != null, UseShellExecute = false,
+            StandardOutputEncoding = Encoding.UTF8, StandardInputEncoding = stdin != null ? new UTF8Encoding(false) : null,
+        };
+        foreach (var a in args) psi.ArgumentList.Add(a);
+        using var p = Process.Start(psi)!;
+        if (stdin != null) { p.StandardInput.Write(stdin); p.StandardInput.Close(); }
+        var outTask = p.StandardOutput.ReadToEndAsync();
+        var errTask = p.StandardError.ReadToEndAsync();
+        if (!p.WaitForExit(timeoutMs)) { try { p.Kill(true); } catch { } return (-1, "", "Zeitüberschreitung"); }
+        return (p.ExitCode, outTask.Result, errTask.Result);
+    }
+
+    /// <summary>Startet ein Programm im Hintergrund (wl-copy bleibt laufen, bis die Zwischenablage ersetzt wird).</summary>
+    static void Spawn(string file, IEnumerable<string> args, string stdin)
+    {
+        var psi = new ProcessStartInfo(file) { RedirectStandardInput = true, UseShellExecute = false, StandardInputEncoding = new UTF8Encoding(false),
+            RedirectStandardOutput = true, RedirectStandardError = true };
+        foreach (var a in args) psi.ArgumentList.Add(a);
+        var p = Process.Start(psi)!;
+        p.StandardInput.Write(stdin);
+        p.StandardInput.Close();
+        p.WaitForExit(800);
+    }
+
+    // ───────────── Zwischenablage
+
+    public static string ClipboardTool => Wayland ? (Which("wl-copy") != null ? "wl-clipboard" : "fehlt (wl-clipboard)")
+        : Which("xclip") != null ? "xclip" : Which("xsel") != null ? "xsel" : "fehlt (xclip)";
+
+    public static bool ClipboardAvailable => !ClipboardTool.StartsWith("fehlt");
+
+    public static void SetClipboard(string text, bool primary = false)
+    {
+        if (Wayland && Which("wl-copy") is { } wl)
+            Spawn(wl, primary ? new[] { "--primary", "--type", "text/plain;charset=utf-8" } : new[] { "--type", "text/plain;charset=utf-8" }, text);
+        else if (Which("xclip") is { } xc)
+            Spawn(xc, new[] { "-selection", primary ? "primary" : "clipboard", "-in" }, text);
+        else if (Which("xsel") is { } xs)
+            Spawn(xs, new[] { primary ? "--primary" : "--clipboard", "--input" }, text);
+        else
+            throw new FluesterException("Kein Zwischenablage-Werkzeug – " + (Wayland ? "wl-clipboard" : "xclip") + " installieren");
+    }
+
+    public static string? GetClipboard(bool primary = false)
+    {
+        try
+        {
+            if (Wayland && Which("wl-paste") is { } wp)
+                return Ok(Run(wp, primary ? new[] { "--primary", "--no-newline" } : new[] { "--no-newline" }, timeoutMs: 1500));
+            if (Which("xclip") is { } xc) return Ok(Run(xc, new[] { "-selection", primary ? "primary" : "clipboard", "-out" }, timeoutMs: 1500));
+            if (Which("xsel") is { } xs) return Ok(Run(xs, new[] { primary ? "--primary" : "--clipboard", "--output" }, timeoutMs: 1500));
+        }
+        catch { }
+        return null;
+        static string? Ok((int Code, string Out, string Err) r) => r.Code == 0 ? r.Out : null;
+    }
+
+    // ───────────── Aktives Fenster (für Stil und Terminal-Erkennung)
+
+    public static TargetApp ActiveWindow()
+    {
+        try
+        {
+            if (X11 && Which("xdotool") is { } xd)
+            {
+                var cls = Run(xd, new[] { "getactivewindow", "getwindowclassname" }, timeoutMs: 800).Out.Trim();
+                var title = Run(xd, new[] { "getactivewindow", "getwindowname" }, timeoutMs: 800).Out.Trim();
+                return new TargetApp(cls, cls.ToLowerInvariant(), title);
+            }
+            if (Environment.GetEnvironmentVariable("HYPRLAND_INSTANCE_SIGNATURE") != null && Which("hyprctl") is { } hc)
+            {
+                using var doc = JsonDocument.Parse(Run(hc, new[] { "activewindow", "-j" }, timeoutMs: 800).Out);
+                var cls = doc.RootElement.GetProperty("class").GetString() ?? "";
+                return new TargetApp(cls, cls.ToLowerInvariant(), doc.RootElement.GetProperty("title").GetString());
+            }
+            if (Environment.GetEnvironmentVariable("SWAYSOCK") != null && Which("swaymsg") is { } sw)
+            {
+                using var doc = JsonDocument.Parse(Run(sw, new[] { "-t", "get_tree" }, timeoutMs: 800).Out);
+                var focused = FindFocused(doc.RootElement);
+                if (focused is { } f)
+                {
+                    var app = f.TryGetProperty("app_id", out var a) && a.ValueKind == JsonValueKind.String ? a.GetString()
+                        : f.TryGetProperty("window_properties", out var wp) && wp.TryGetProperty("class", out var c) ? c.GetString() : "";
+                    return new TargetApp(app ?? "", (app ?? "").ToLowerInvariant(), f.TryGetProperty("name", out var n) ? n.GetString() : null);
+                }
+            }
+        }
+        catch (Exception e)
+        {
+            Log.Write("Aktives Fenster: " + e.Message);
+        }
+        return TargetApp.Unknown;
+    }
+
+    static JsonElement? FindFocused(JsonElement node)
+    {
+        if (node.TryGetProperty("focused", out var f) && f.ValueKind == JsonValueKind.True) return node;
+        foreach (var key in new[] { "nodes", "floating_nodes" })
+            if (node.TryGetProperty(key, out var arr))
+                foreach (var child in arr.EnumerateArray())
+                    if (FindFocused(child) is { } hit) return hit;
+        return null;
+    }
+
+    static readonly string[] Terminals =
+    {
+        "gnome-terminal", "gnome-terminal-server", "org.gnome.terminal", "org.gnome.ptyxis", "ptyxis", "konsole", "org.kde.konsole", "kitty",
+        "alacritty", "wezterm", "org.wezfurlong.wezterm", "foot", "xterm", "uxterm", "tilix", "terminator", "xfce4-terminal", "lxterminal",
+        "mate-terminal", "terminology", "ghostty", "com.mitchellh.ghostty", "st", "urxvt", "rxvt", "blackbox", "com.raggesilver.blackbox", "warp",
+    };
+
+    public static bool IsTerminal(TargetApp app) => Terminals.Contains(app.Id) || app.Id.Contains("terminal");
+
+    // ───────────── Benachrichtigungen und Töne
+
+    static string? notifyId;
+
+    public static void Notify(string title, string body, bool urgent = false)
+    {
+        if (Which("notify-send") is not { } ns) return;
+        try
+        {
+            var args = new List<string> { "--app-name=Flüster", "--icon=audio-input-microphone", "--print-id", "-h", "string:x-canonical-private-synchronous:fluester" };
+            if (notifyId != null) { args.Add("--replace-id=" + notifyId); }
+            if (urgent) args.Add("--urgency=critical");
+            args.Add(title);
+            if (body.Length > 0) args.Add(body);
+            var r = Run(ns, args, timeoutMs: 1500);
+            if (r.Code != 0 && notifyId != null)
+            {
+                // Ältere notify-send ohne --replace-id
+                args.RemoveAll(a => a.StartsWith("--replace-id") || a == "--print-id");
+                r = Run(ns, args, timeoutMs: 1500);
+            }
+            var id = r.Out.Trim();
+            if (id.Length > 0 && id.All(char.IsDigit)) notifyId = id;
+        }
+        catch { }
+    }
+
+    static readonly Lazy<Dictionary<string, string>> SoundFiles = new(() =>
+    {
+        var dir = Path.Combine(Paths.Data, "sounds");
+        Directory.CreateDirectory(dir);
+        var files = new Dictionary<string, string>
+        {
+            ["start"] = Tone(dir, "start", new[] { (660.0, 0.05), (880.0, 0.06) }, 0.18),
+            ["stop"] = Tone(dir, "stop", new[] { (880.0, 0.05), (660.0, 0.06) }, 0.16),
+            ["error"] = Tone(dir, "error", new[] { (330.0, 0.09), (262.0, 0.12) }, 0.2),
+        };
+        return files;
+    });
+
+    static string Tone(string dir, string name, (double Hz, double Sec)[] parts, double volume)
+    {
+        var path = Path.Combine(dir, name + ".wav");
+        if (File.Exists(path)) return path;
+        const int rate = 44100;
+        var samples = new List<float>();
+        foreach (var (hz, sec) in parts)
+        {
+            int n = (int)(rate * sec);
+            for (int i = 0; i < n; i++)
+            {
+                double env = Math.Min(1, Math.Min(i / (rate * 0.006), (n - i) / (rate * 0.02)));
+                samples.Add((float)(Math.Sin(2 * Math.PI * hz * i / rate) * volume * env));
+            }
+        }
+        File.WriteAllBytes(path, AudioUtil.Wav(samples.ToArray(), rate));
+        return path;
+    }
+
+    public static void Sound(string name)
+    {
+        var player = Which("pw-play") ?? Which("paplay") ?? Which("aplay");
+        if (player == null) return;
+        try
+        {
+            var psi = new ProcessStartInfo(player) { UseShellExecute = false, RedirectStandardError = true, RedirectStandardOutput = true };
+            if (player.EndsWith("aplay")) psi.ArgumentList.Add("-q");
+            psi.ArgumentList.Add(SoundFiles.Value[name]);
+            Process.Start(psi);
+        }
+        catch { }
+    }
+}
+
+/// <summary>Mikrofon über parecord (PulseAudio/PipeWire), arecord (ALSA) oder pw-record – roh, 16 kHz, mono, 16 Bit.</summary>
+sealed class Recorder : IDisposable
+{
+    Process? proc;
+    readonly List<byte> pcm = new();
+    Thread? reader;
+    public event Action<float>? Level;
+    public DateTime Started { get; private set; }
+    public bool IsRecording => proc != null;
+
+    public static string? Tool => Desktop.Which("parecord") != null ? "parecord" : Desktop.Which("arecord") != null ? "arecord"
+        : Desktop.Which("pw-record") != null ? "pw-record" : null;
+
+    public void Start(string deviceId)
+    {
+        Stop();
+        var tool = Tool ?? throw new FluesterException("Kein Aufnahme-Werkzeug – pulseaudio-utils (parecord) oder alsa-utils (arecord) installieren");
+        var psi = new ProcessStartInfo(Desktop.Which(tool)!) { RedirectStandardOutput = true, RedirectStandardError = true, UseShellExecute = false };
+        switch (tool)
+        {
+            case "parecord":
+                foreach (var a in new[] { "--raw", "--rate=16000", "--channels=1", "--format=s16le", "--latency-msec=40" }) psi.ArgumentList.Add(a);
+                if (deviceId.Length > 0) psi.ArgumentList.Add("--device=" + deviceId);
+                break;
+            case "arecord":
+                foreach (var a in new[] { "-q", "-f", "S16_LE", "-r", "16000", "-c", "1", "-t", "raw" }) psi.ArgumentList.Add(a);
+                if (deviceId.Length > 0) { psi.ArgumentList.Add("-D"); psi.ArgumentList.Add(deviceId); }
+                break;
+            default:
+                foreach (var a in new[] { "--raw", "--rate", "16000", "--channels", "1", "--format", "s16" }) psi.ArgumentList.Add(a);
+                if (deviceId.Length > 0) { psi.ArgumentList.Add("--target"); psi.ArgumentList.Add(deviceId); }
+                psi.ArgumentList.Add("-");
+                break;
+        }
+        lock (pcm) pcm.Clear();
+        proc = Process.Start(psi) ?? throw new FluesterException("Aufnahme startet nicht");
+        Started = DateTime.UtcNow;
+        var stream = proc.StandardOutput.BaseStream;
+        reader = new Thread(() =>
+        {
+            var buf = new byte[3200];
+            try
+            {
+                int n;
+                while ((n = stream.Read(buf, 0, buf.Length)) > 0)
+                {
+                    lock (pcm) if (pcm.Count < 16000 * 2 * 900) pcm.AddRange(buf.AsSpan(0, n).ToArray());
+                    Level?.Invoke(AudioUtil.Level(AudioUtil.FromPcm16(buf.AsSpan(0, n - n % 2))));
+                }
+            }
+            catch { }
+        }) { IsBackground = true, Name = "Aufnahme" };
+        reader.Start();
+    }
+
+    public float[] Stop()
+    {
+        if (proc != null)
+        {
+            try { proc.Kill(); } catch { }
+            reader?.Join(1000);
+            var err = proc.StandardError.ReadToEnd();
+            if (err.Length > 0) Log.Write("Aufnahme: " + err.Trim());
+            proc.Dispose();
+            proc = null;
+        }
+        byte[] bytes;
+        lock (pcm) { bytes = pcm.ToArray(); pcm.Clear(); }
+        return AudioUtil.FromPcm16(bytes.AsSpan(0, bytes.Length - bytes.Length % 2));
+    }
+
+    /// <summary>Mikrofone (PulseAudio-Quellen ohne Monitore).</summary>
+    public static List<(string Id, string Name)> Devices()
+    {
+        var list = new List<(string, string)>();
+        if (Desktop.Which("pactl") is { } pactl)
+        {
+            var r = Desktop.Run(pactl, new[] { "list", "short", "sources" });
+            foreach (var line in r.Out.Split('\n', StringSplitOptions.RemoveEmptyEntries))
+            {
+                var parts = line.Split('\t');
+                if (parts.Length > 1 && !parts[1].EndsWith(".monitor")) list.Add((parts[1], parts[1]));
+            }
+        }
+        return list;
+    }
+
+    public void Dispose() => Stop();
+}

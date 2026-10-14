@@ -4,7 +4,8 @@ name: Release
 #   1. CHANGELOG.md um einen Abschnitt "## [1.2.3]" ergänzen
 #   2. Actions › Release › "Run workflow" › Version 1.2.3 eintragen
 #      (oder: git tag v1.2.3 && git push origin v1.2.3)
-# Der Workflow testet, baut, prüft die App mit echter Spracherkennung und hängt die ZIP an das Release.
+# Baut und prüft macOS, Windows und Linux (inkl. echter Spracherkennung), veröffentlicht alle Pakete
+# in einem Release und testet danach die Installation so, wie Nutzer sie machen.
 on:
   push:
     tags: ["v*"]
@@ -18,15 +19,14 @@ permissions:
   contents: write
 
 jobs:
-  release:
-    name: Bauen und veröffentlichen
-    runs-on: macos-26
-    timeout-minutes: 40
+  version:
+    name: Version
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.v.outputs.version }}
+      tag: ${{ steps.v.outputs.tag }}
     steps:
-      - uses: actions/checkout@v4
-
-      - name: Version
-        id: v
+      - id: v
         env:
           INPUT_VERSION: ${{ inputs.version }}
         run: |
@@ -35,89 +35,106 @@ jobs:
           echo "version=$v" >> "$GITHUB_OUTPUT"
           echo "tag=v$v" >> "$GITHUB_OUTPUT"
 
-      - name: Tests (FluesterCore)
-        run: swift test
+  macos:
+    needs: version
+    uses: ./.github/workflows/macos.yml
+    with:
+      version: ${{ needs.version.outputs.version }}
 
-      - name: App bauen
-        run: VERSION="${{ steps.v.outputs.version }}" BUILD="${{ github.run_number }}" ./scripts/build-app.sh
+  windows-linux:
+    needs: version
+    uses: ./.github/workflows/dotnet.yml
+    with:
+      version: ${{ needs.version.outputs.version }}
 
-      - name: Bundle prüfen
-        run: |
-          plutil -lint "build/Flüster.app/Contents/Info.plist"
-          /usr/libexec/PlistBuddy -c "Print CFBundleShortVersionString" "build/Flüster.app/Contents/Info.plist"
-          codesign --verify --verbose=1 "build/Flüster.app"
-
-      - name: whisper.cpp für den Selbsttest
-        run: |
-          brew install whisper-cpp
-          MODELS="$HOME/Library/Application Support/Fluester/models"
-          mkdir -p "$MODELS"
-          curl -sSL --retry 3 -o "$MODELS/ggml-base.bin" https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-base.bin
-
-      - name: Selbsttest
-        timeout-minutes: 15
-        run: FLUESTER_SELFTEST_WHISPER=base "build/Flüster.app/Contents/MacOS/Fluester" --selftest
-
-      - name: Installer testen (installieren, starten, läuft?)
-        run: |
-          FLUESTER_ZIP=build/Fluester-macOS.zip bash scripts/install.sh
-          test -x "/Applications/Flüster.app/Contents/MacOS/Fluester"
-          sleep 6
-          pgrep -x Fluester >/dev/null && echo "✓ Flüster läuft nach dem Start" || { echo "✗ Flüster läuft nicht"; exit 1; }
-          pkill -x Fluester || true
-          bash scripts/install.sh --uninstall
-          test ! -e "/Applications/Flüster.app"
-
-      - name: Prüfsumme und Release-Text
+  publish:
+    name: Veröffentlichen
+    needs: [version, macos, windows-linux]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+      - name: Prüfsummen und Release-Text
         env:
-          VERSION: ${{ steps.v.outputs.version }}
+          VERSION: ${{ needs.version.outputs.version }}
         run: |
-          cd build
-          shasum -a 256 Fluester-macOS.zip > Fluester-macOS.zip.sha256
+          cd dist
+          ls -la
+          sha256sum Fluester-* > SHA256SUMS.txt
+          cat SHA256SUMS.txt
           cd ..
-          # Abschnitt dieser Version aus dem CHANGELOG
           awk -v v="$VERSION" '
             $0 ~ "^## \\[" v "\\]" { on = 1; next }
             on && /^## \[/ { exit }
             on { print }
-          ' CHANGELOG.md > build/changes.md
+          ' CHANGELOG.md > dist/changes.md
+          R="https://raw.githubusercontent.com/${GITHUB_REPOSITORY}/main/scripts"
           {
             echo "## Installieren"
             echo
-            echo "Terminal öffnen (⌘ + Leertaste → „Terminal“) und einfügen:"
-            echo
+            echo "**macOS** (Apple-Chip, macOS 14+) und **Linux** (x64/arm64) – im Terminal:"
             echo '```bash'
-            echo "curl -fsSL https://raw.githubusercontent.com/${GITHUB_REPOSITORY}/main/scripts/install.sh | bash"
+            echo "curl -fsSL $R/install.sh | bash"
             echo '```'
+            echo "**Windows** (10/11, 64 Bit) – in PowerShell:"
+            echo '```powershell'
+            echo "irm $R/install.ps1 | iex"
+            echo '```'
+            echo "Oder die Datei für dein System unten laden. Schritt für Schritt: [macOS](https://github.com/${GITHUB_REPOSITORY}/blob/main/docs/macos.md) · [Windows](https://github.com/${GITHUB_REPOSITORY}/blob/main/docs/windows.md) · [Linux](https://github.com/${GITHUB_REPOSITORY}/blob/main/docs/linux.md)"
             echo
-            echo "Oder **Fluester-macOS.zip** unten herunterladen. Schritt für Schritt: [Anleitung](https://github.com/${GITHUB_REPOSITORY}#installation)."
-            echo
-            echo "Braucht einen Mac mit Apple-Chip (M1 oder neuer) und macOS 14 oder neuer."
-            echo
-            if [ -s build/changes.md ]; then
+            if [ -s dist/changes.md ]; then
               echo "## Neu in $VERSION"
-              cat build/changes.md
+              cat dist/changes.md
             fi
-          } > build/notes.md
-          cat build/notes.md
-
+          } > dist/notes.md
+          cat dist/notes.md
       - name: Release veröffentlichen
         env:
           GH_TOKEN: ${{ github.token }}
-          VERSION: ${{ steps.v.outputs.version }}
-          TAG: ${{ steps.v.outputs.tag }}
+          TAG: ${{ needs.version.outputs.tag }}
+          VERSION: ${{ needs.version.outputs.version }}
         run: |
-          # Legt den Tag selbst an, falls der Lauf per Knopf gestartet wurde
-          gh release create "$TAG" --target "$GITHUB_SHA" \
-            build/Fluester-macOS.zip build/Fluester-macOS.zip.sha256 \
-            --title "Flüster $VERSION" \
-            --notes-file build/notes.md
+          gh release create "$TAG" --target "$GITHUB_SHA" --title "Flüster $VERSION" --notes-file dist/notes.md \
+            dist/Fluester-macOS.zip dist/Fluester-Windows-x64.zip dist/Fluester-Linux-x64.tar.gz dist/Fluester-Linux-arm64.tar.gz dist/SHA256SUMS.txt
 
-      - name: Download aus dem Release prüfen (wie bei Nutzern)
-        env:
-          FLUESTER_REPO: ${{ github.repository }}
-        run: |
+  verify-macos:
+    name: Prüfen – macOS-Download
+    needs: [version, publish]
+    runs-on: macos-26
+    steps:
+      - uses: actions/checkout@v4
+      - run: |
           sleep 10
-          bash scripts/install.sh
-          /usr/libexec/PlistBuddy -c "Print CFBundleShortVersionString" "/Applications/Flüster.app/Contents/Info.plist"
+          FLUESTER_REPO="$GITHUB_REPOSITORY" bash scripts/install.sh
+          /usr/libexec/PlistBuddy -c "Print CFBundleShortVersionString" "/Applications/Flüster.app/Contents/Info.plist" | grep -x "${{ needs.version.outputs.version }}"
           pkill -x Fluester || true
+
+  verify-windows:
+    name: Prüfen – Windows-Download
+    needs: [version, publish]
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - shell: pwsh
+        run: |
+          Start-Sleep -Seconds 10
+          $env:FLUESTER_REPO = $env:GITHUB_REPOSITORY
+          $env:FLUESTER_NO_START = '1'
+          & .\scripts\install.ps1
+          $v = (Get-Item "$env:LOCALAPPDATA\Programs\Fluester\Fluester.exe").VersionInfo.ProductVersion
+          Write-Host "Installiert: $v"
+          if (-not $v.StartsWith('${{ needs.version.outputs.version }}')) { throw "falsche Version" }
+
+  verify-linux:
+    name: Prüfen – Linux-Download
+    needs: [version, publish]
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - run: |
+          sleep 10
+          FLUESTER_REPO="$GITHUB_REPOSITORY" FLUESTER_NO_SETUP=1 bash scripts/install.sh
+          ~/.local/bin/fluester version | grep "${{ needs.version.outputs.version }}"
