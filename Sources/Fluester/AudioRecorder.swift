@@ -144,6 +144,35 @@ enum AudioDevices {
 
 /// AVAudioPCMBuffer aus Samples bauen und ins gewünschte Format wandeln.
 enum AudioBuffers {
+    /// Audiodatei (AIFF, WAV, M4A …) als 16 kHz mono Float laden.
+    static func loadFile(_ url: URL, sampleRate: Double = AudioRecorder.sampleRate) throws -> [Float] {
+        let file = try AVAudioFile(forReading: url)
+        let format = file.processingFormat
+        guard let buf = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: AVAudioFrameCount(file.length)) else {
+            throw FluesterError("Datei zu groß")
+        }
+        try file.read(into: buf)
+        guard let target = AVAudioFormat(commonFormat: .pcmFormatFloat32, sampleRate: sampleRate, channels: 1, interleaved: false),
+              let conv = AVAudioConverter(from: format, to: target),
+              let out = AVAudioPCMBuffer(pcmFormat: target, frameCapacity: AVAudioFrameCount(Double(buf.frameLength) * sampleRate / format.sampleRate + 4096)) else {
+            throw FluesterError("Audioformat nicht wandelbar")
+        }
+        let fed = Flag()
+        var error: NSError?
+        let status = conv.convert(to: out, error: &error) { _, inputStatus in
+            if fed.value {
+                inputStatus.pointee = .endOfStream
+                return nil
+            }
+            fed.value = true
+            inputStatus.pointee = .haveData
+            return buf
+        }
+        if status == .error { throw FluesterError(error?.localizedDescription ?? "Audio-Wandlung fehlgeschlagen") }
+        guard let data = out.floatChannelData else { return [] }
+        return Array(UnsafeBufferPointer(start: data[0], count: Int(out.frameLength)))
+    }
+
     static func make(samples: [Float], sampleRate: Double, to target: AVAudioFormat?) throws -> AVAudioPCMBuffer {
         guard !samples.isEmpty,
               let src = AVAudioFormat(commonFormat: .pcmFormatFloat32, sampleRate: sampleRate, channels: 1, interleaved: false),

@@ -347,8 +347,9 @@ final class DictationController {
         var sel = selection
         if sel == nil { sel = await TextInserter.copySelection() }
         let system = Prompts.commandSystem(appName: target.name, languageName: s.languageName)
+        let user = Prompts.commandUser(instruction: instruction, selection: sel)
         let out = try await withTimeout(30) {
-            try await rewriter.complete(system: system, user: Prompts.commandUser(instruction: instruction, selection: sel))
+            try await rewriter.complete(system: system, user: user)
         }
         guard let clean = Prompts.sanitize(out, input: instruction, isCommand: true) else {
             throw FluesterError("Das Modell hat nichts Brauchbares geliefert")

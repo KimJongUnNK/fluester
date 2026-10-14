@@ -5,6 +5,10 @@ import AppKit
 enum FluesterMain {
     @MainActor
     static func main() {
+        if CommandLine.arguments.contains("--selftest") {
+            SelfTest.start()
+            return
+        }
         let app = NSApplication.shared
         let delegate = AppDelegate()
         app.delegate = delegate
