@@ -35,6 +35,7 @@ Du hältst **Strg rechts**, sprichst und lässt los. Der Text landet sauber form
 2. Der Assistent (`fluester setup`) startet von selbst und erledigt:
    - **Rechte:** Er nimmt dich in die Gruppe `input` auf und legt eine udev-Regel für `/dev/uinput` an. Das geht einmalig mit `sudo`, der Assistent fragt vorher.
    - **Werkzeuge:** Er schlägt fehlende Pakete passend zu deiner Distribution vor (`wl-clipboard` bzw. `xclip`, `pulseaudio-utils`, `libnotify`) und installiert sie auf Wunsch.
+   - **Mikrofon:** Er listet alle Mikrofone mit Nummer auf. Du wählst eins und siehst den Pegel live, während du sprichst.
    - **Taste, Erkennung und Modell:** Er lädt **Large v3 Turbo** (547 MB) oder ein kleineres Modell herunter.
    - **Autostart:** Flüster startet ab dann bei jeder Anmeldung.
 3. **Einmal ab- und wieder anmelden**, falls der Assistent dich in die Gruppe `input` aufgenommen hat. Flüster startet danach von selbst.
@@ -57,11 +58,40 @@ Installiert wird nur für deinen Nutzer, nach `~/.local/share/fluester/app`. Der
 
 Ein leiser Ton markiert Start und Ende der Aufnahme. Fehler und Hinweise erscheinen als Desktop-Benachrichtigung.
 
+### Mikrofon wählen
+
+```bash
+fluester mic
+```
+
+Das zeigt alle Mikrofone mit Nummer. Das aktuelle ist mit ● markiert, Lautsprecher-Monitore sind ausgeblendet:
+
+```text
+Mikrofone (Aufnahme über parecord):
+  ● 0  Systemstandard – gerade: Eingebautes Tonsystem Analog Stereo
+    1  Eingebautes Tonsystem Analog Stereo
+    2  Yeti Stereo Microphone Analog Stereo
+  Nummer wählen [Enter = so lassen]: 2
+✓ Mikrofon: Yeti Stereo Microphone Analog Stereo
+  Pegel testen? [J/n]
+Pegel von Yeti Stereo Microphone Analog Stereo – sprich ein paar Worte …
+  ▕██████████████████░░░░░░░░░░░░▏  61 %   noch 3 s
+```
+
+- **Direkt wählen:** mit Nummer (`fluester mic 2`) oder einem Stück vom Namen (`fluester mic yeti`).
+- **Zurück auf den Systemstandard:** `fluester mic 0`.
+- **Nur Pegel prüfen:** `fluester mic test`. Ob die Erkennung klappt, zeigt `fluester test`.
+- **Laufendes Flüster:** Es nimmt die Wahl ab dem nächsten Diktat, ohne Neustart.
+- **Mikrofon abgesteckt:** Flüster nimmt solange den Systemstandard und sagt einmal Bescheid. Steckst du es wieder an, gilt wieder deine Wahl.
+- **Stummgeschaltet:** Ist das gewählte Mikrofon stumm, bietet `fluester mic` an, die Stummschaltung aufzuheben.
+
 ### Befehle
 
 ```text
 fluester setup              Einrichtung erneut starten
-fluester status             läuft er? Taste, Erkennung, Probleme
+fluester mic                Mikrofon wählen und Pegel testen
+fluester mic list | test | <nummer>
+fluester status             läuft er? Taste, Mikrofon, Erkennung, Probleme
 fluester start | stop       Dienst starten / beenden
 fluester run                im Vordergrund laufen lassen (zeigt alle Meldungen)
 fluester toggle             freihändig starten/beenden – für eigene Tastenkürzel
@@ -93,7 +123,7 @@ fluester autostart on|off
 | `cloudChat` | Anbieter fürs Sprachmodell, z. B. `{"providerId":"ollama","baseUrl":"http://localhost:11434/v1","model":"qwen2.5:7b"}` |
 | `pasteShortcut` | `auto` (Terminals: Strg+Umschalt+V), `ctrl+v`, `ctrl+shift+v`, `shift+insert` |
 | `insertMethod` | `paste` (Standard) oder `type` (tippt über `wtype`/`xdotool`) |
-| `microphoneId` | leer = Standard, sonst Name aus `pactl list short sources` |
+| `microphoneId` | leer = Systemstandard. Am einfachsten setzt du es mit `fluester mic` |
 | `dictionary`, `snippets`, `styles` | Wörterbuch, Textbausteine und Stil je App-Gruppe, wie auf dem Mac |
 | `sounds`, `notifications` | Töne und Benachrichtigungen an/aus |
 
@@ -128,8 +158,13 @@ Der erste Schritt ist immer **`fluester status`**. Der Befehl listet erkannte Pr
 **Im Terminal erscheint `^V` statt des Texts.**
 Mit `pasteShortcut` auf `auto` erkennt Flüster Terminals unter X11, Sway und Hyprland selbst. Unter GNOME und KDE auf Wayland lässt sich das aktive Fenster nicht abfragen. Stell dort `"pasteShortcut": "ctrl+shift+v"` ein, wenn du vor allem im Terminal diktierst.
 
-**Die Aufnahme ist stumm, „Nichts verstanden“.**
-Mit `fluester test` prüfst du das Mikrofon. Mit `pavucontrol` oder in den Ton-Einstellungen wählst du das richtige Eingabegerät, oder du trägst `microphoneId` ein.
+**Die Aufnahme ist stumm, „Nichts verstanden“, oder das falsche Mikrofon nimmt auf.**
+- Mit `fluester mic` wählst du das Mikrofon und siehst live, ob Ton ankommt.
+- Bleibt der Pegel bei 0 %, ist das Mikrofon stummgeschaltet oder in den Ton-Einstellungen sehr leise gestellt.
+- `fluester selftest` nimmt jedes Mikrofon kurz auf und zeigt den Pegel. So siehst du auf einen Blick, welches wirklich Ton liefert.
+
+**„Aufnahme fehlgeschlagen“.**
+Flüster nimmt über `parecord` auf, ohne das über `pw-record` (PipeWire), sonst über `arecord`. Welches Werkzeug läuft, zeigt `fluester mic list` in der ersten Zeile. Ein bestimmtes erzwingst du mit `FLUESTER_RECORDER=pw-record fluester run`. Fehlt `parecord`, installierst du es mit `sudo dnf install pulseaudio-utils` (Fedora) bzw. `sudo apt install pulseaudio-utils` (Ubuntu/Debian).
 
 **Die Feststelltaste schaltet beim Diktieren um.**
 Unter Linux kann Flüster Tasten lesen, aber nicht schlucken. Nimm daher lieber **Strg rechts**.
@@ -166,12 +201,13 @@ dist/linux-x64/fluester selftest                           # Selbsttest
 
 **Aufbau:**
 - `dotnet/Fluester.Core` und `dotnet/Fluester.Engine`: Die Logik ist dieselbe wie unter Windows und auf dem Mac.
-- `linux/Fluester.Linux`: Dienst, evdev-Tastatur, uinput-Einfügen, Aufnahme über `parecord`/`arecord`/`pw-record`, Desktop-Anbindung, Assistent.
+- `linux/Fluester.Linux`: Dienst, evdev-Tastatur, uinput-Einfügen, Aufnahme und Mikrofon-Auswahl über `parecord`/`pw-record`/`arecord`, Desktop-Anbindung, Assistent.
 
 ## Stand
 
 Die CI prüft jede Version automatisch auf Ubuntu:
 - Diktat-Taste über eine virtuelle Tastatur und `/dev/input`
+- Mikrofon-Auswahl mit virtuellen Mikrofonen (eins mit Ton, eins stumm), Rückfall bei abgestecktem Mikrofon, Wechsel im laufenden Dienst
 - Zwischenablage unter X11
 - echte Spracherkennung mit Whisper
 - Installer

@@ -4,7 +4,7 @@ using Fluester.Engine;
 
 namespace Fluester.Linux;
 
-/// <summary>Einrichtung im Terminal: Rechte (Gruppe input, /dev/uinput), Werkzeuge, Taste, Erkennung, Modell, Autostart.</summary>
+/// <summary>Einrichtung im Terminal: Rechte (Gruppe input, /dev/uinput), Werkzeuge, Mikrofon, Taste, Erkennung, Modell, Autostart.</summary>
 static class Setup
 {
     const string UdevRule = "/etc/udev/rules.d/80-fluester-uinput.rules";
@@ -157,20 +157,24 @@ static class Setup
         if (missing.Count > 0 && PackageManager != null)
         {
             Info("Installieren: sudo " + string.Join(' ', InstallCommand(missing)));
-            if (Ask("Jetzt installieren?")) Sudo(InstallCommand(missing));
+            if (Ask("Jetzt installieren?")) { Sudo(InstallCommand(missing)); Desktop.Rescan(); }
         }
         else if (missing.Count > 0) Info("Bitte installieren: " + string.Join(", ", missing));
 
-        // 3) Taste
-        Title("3  Diktat-Taste");
+        // 3) Mikrofon
+        Title("3  Mikrofon");
+        Mic.Choose(store, yes);
+
+        // 4) Taste
+        Title("4  Diktat-Taste");
         var keys = Enum.GetValues<HotkeyChoice>();
         Info("Halten = sprechen, doppelt tippen = freihändig, + Umschalt = Command Mode.");
         Info("Hinweis: Unter Linux lässt sich die Taste nicht „schlucken“ – Feststelltaste schaltet weiter um, daher Strg rechts empfohlen.");
         int k = Choose("Taste?", keys.Select(h => h.Label(linux: true)).ToArray(), Array.IndexOf(keys, store.Current.Hotkey));
         store.Update(s => s.Hotkey = keys[k]);
 
-        // 4) Erkennung
-        Title("4  Erkennung");
+        // 5) Erkennung
+        Title("5  Erkennung");
         int engine = Choose("Erkennung?", new[] { "Whisper lokal (offline, kostenlos)", "Groq Cloud (schnell, Gratis-Kontingent, braucht Schlüssel)" },
             store.Current.Engine == EngineChoice.Cloud ? 1 : 0);
         if (engine == 0)
@@ -196,8 +200,8 @@ static class Setup
             else Good("Groq-Schlüssel vorhanden");
         }
 
-        // 5) KI-Bereinigung
-        Title("5  KI-Bereinigung");
+        // 6) KI-Bereinigung
+        Title("6  KI-Bereinigung");
         int clean = Choose("Bereinigung?", new[] { "Nur Regeln (sofort, offline)", "Sprachmodell über Groq (formuliert sauberer, braucht Schlüssel)", "Sprachmodell über Ollama (lokal)" },
             store.Current.Cleanup == CleanupChoice.Llm ? (store.Current.CloudChat.ProviderId == "ollama" ? 2 : 1) : 0);
         store.Update(s =>
@@ -213,8 +217,8 @@ static class Setup
         }
         if (clean == 2) Info("Ollama: https://ollama.com – danach „ollama pull qwen2.5:7b“");
 
-        // 6) Autostart
-        Title("6  Autostart");
+        // 7) Autostart
+        Title("7  Autostart");
         if (Ask("Flüster bei der Anmeldung automatisch starten?"))
         {
             Autostart(true);
@@ -224,7 +228,7 @@ static class Setup
 
         Title("Fertig");
         Info($"Diktieren: in ein Textfeld klicken, {store.Current.Hotkey.Label(linux: true)} halten, sprechen, loslassen.");
-        Info("Befehle: fluester status · fluester toggle · fluester config · fluester help");
+        Info("Befehle: fluester status · fluester mic · fluester toggle · fluester config · fluester help");
         if (needRelogin)
         {
             Bad("Wichtig: einmal ab- und wieder anmelden (Gruppe „input“ wird erst dann aktiv). Flüster startet danach von selbst.");

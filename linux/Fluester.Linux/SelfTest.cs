@@ -28,8 +28,8 @@ static class SelfTest
             Storage();
             Input(Environment.GetEnvironmentVariable("FLUESTER_SELFTEST_INPUT") == "1");
             Clipboard(Environment.GetEnvironmentVariable("FLUESTER_SELFTEST_CLIPBOARD") == "1");
-            Log("Werkzeuge: Aufnahme " + (Recorder.Tool ?? "fehlt") + " · Zwischenablage " + Desktop.ClipboardTool + " · Mikrofone: " +
-                string.Join(", ", Recorder.Devices().Select(d => d.Name).DefaultIfEmpty("keine")));
+            Log("Werkzeuge: Aufnahme " + (Recorder.Tool ?? "fehlt") + " · Zwischenablage " + Desktop.ClipboardTool);
+            Microphones();
             await Speech();
         }
         catch (Exception e)
@@ -112,6 +112,26 @@ static class SelfTest
         Desktop.SetClipboard("primär", primary: true);
         Thread.Sleep(150);
         Check(Desktop.GetClipboard(primary: true) == "primär", "Primär-Auswahl (für Command Mode)", required);
+    }
+
+    /// <summary>Jedes Mikrofon kurz aufnehmen und den Pegel zeigen – zeigt, welches wirklich Ton liefert.</summary>
+    static void Microphones()
+    {
+        var mics = Recorder.Devices();
+        var current = new SettingsStore().Current.MicrophoneId;
+        Log($"Mikrofone ({Recorder.Tool ?? "kein Aufnahme-Werkzeug"}) · gewählt: {Recorder.Describe(current, mics)}");
+        if (mics.Count == 0) { Log("  keine einzeln auflistbar – Flüster nimmt den Systemstandard"); return; }
+        foreach (var m in mics.Take(6))
+        {
+            using var rec = new Recorder();
+            float peak = 0;
+            rec.Level += l => { if (l > peak) peak = l; };
+            rec.Start(m.Id);
+            Thread.Sleep(700);
+            var samples = rec.Stop();
+            var state = rec.LastError != null ? "Fehler: " + rec.LastError : samples.Length == 0 ? "keine Daten" : $"Pegel {(int)(peak * 100)} %";
+            Log($"  {(m.Id == current ? "●" : "·")} {m.Name}{(m.IsDefault ? " (Systemstandard)" : "")}{(m.Muted ? " · stummgeschaltet" : "")}: {state}");
+        }
     }
 
     static async Task Speech()

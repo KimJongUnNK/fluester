@@ -144,4 +144,20 @@ public static class AudioUtil
         for (int i = 0; i < output.Length; i++) output[i] = BitConverter.ToInt16(pcm.Slice(i * 2, 2)) / 32768f;
         return output;
     }
+
+    /// <summary>Wo im Datenstrom die Samples beginnen: hinter einem WAV-Kopf (RIFF … data), sonst 0 (rohes PCM).
+    /// Manche Aufnahme-Werkzeuge schreiben je nach Version einen Kopf vor die Daten.</summary>
+    public static int PcmStart(ReadOnlySpan<byte> stream)
+    {
+        if (stream.Length < 12 || !stream[..4].SequenceEqual("RIFF"u8) || !stream.Slice(8, 4).SequenceEqual("WAVE"u8)) return 0;
+        int pos = 12;
+        while (pos + 8 <= stream.Length)
+        {
+            int size = BitConverter.ToInt32(stream.Slice(pos + 4, 4));
+            if (stream.Slice(pos, 4).SequenceEqual("data"u8)) return pos + 8;
+            if (size < 0) break;
+            pos += 8 + size + (size & 1);
+        }
+        return Math.Min(44, stream.Length);
+    }
 }

@@ -26,6 +26,7 @@ sealed class Daemon : IDisposable
     readonly BlockingCollection<Action> queue = new();
     readonly Stopwatch clock = Stopwatch.StartNew();
     string? keyboardProblem;
+    string? missingMicNotified;
     readonly HashSet<string> problems = new();
 
     enum State { Idle, Recording, Processing }
@@ -67,7 +68,7 @@ sealed class Daemon : IDisposable
         keyboardProblem = keyboard.Open();
         if (keyboardProblem != null) Problem(keyboardProblem + " – Text landet dann in der Zwischenablage");
         if (!Desktop.ClipboardAvailable) Problem("Zwischenablage-Werkzeug fehlt: " + Desktop.ClipboardTool);
-        if (Recorder.Tool == null) Problem("Aufnahme-Werkzeug fehlt (parecord oder arecord)");
+        if (Recorder.Tool == null) Problem("Aufnahme-Werkzeug fehlt (parecord, pw-record oder arecord) – fluester setup");
         watcher.Start();
         StartSocket();
         Prewarm();
@@ -107,15 +108,20 @@ sealed class Daemon : IDisposable
     {
         try
         {
-            settingsWatcher = new FileSystemWatcher(Paths.Config, "settings.json") { EnableRaisingEvents = true, NotifyFilter = NotifyFilters.LastWrite | NotifyFilters.FileName };
+            // Alle Arten zu speichern: direkt (Editor), neu angelegt, oder per Umbenennen (fluester mic/model/setup schreiben atomar)
+            settingsWatcher = new FileSystemWatcher(Paths.Config) { NotifyFilter = NotifyFilters.LastWrite | NotifyFilters.FileName };
             DateTime last = default;
-            settingsWatcher.Changed += (_, _) =>
+            void OnChange(string? name)
             {
-                if ((DateTime.UtcNow - last).TotalMilliseconds < 300) return;
+                if (name != "settings.json" || (DateTime.UtcNow - last).TotalMilliseconds < 300) return;
                 last = DateTime.UtcNow;
                 Thread.Sleep(100);
                 Post(() => { store.Reload(); Prewarm(); });
-            };
+            }
+            settingsWatcher.Changed += (_, e) => OnChange(e.Name);
+            settingsWatcher.Created += (_, e) => OnChange(e.Name);
+            settingsWatcher.Renamed += (_, e) => OnChange(e.Name);
+            settingsWatcher.EnableRaisingEvents = true;
         }
         catch (Exception e) { Log.Write("Einstellungen beobachten: " + e.Message); }
     }
@@ -162,7 +168,16 @@ sealed class Daemon : IDisposable
         selection = command ? Desktop.GetClipboard(primary: true) : null;
         try
         {
-            recorder.Start(store.Current.MicrophoneId);
+            var wanted = store.Current.MicrophoneId;
+            var mic = Recorder.Resolve(wanted, out bool missing);
+            if (missing && missingMicNotified != wanted)
+            {
+                missingMicNotified = wanted;
+                Log.Write($"Mikrofon {wanted} nicht angeschlossen – nehme den Systemstandard");
+                if (store.Current.Notifications) Desktop.Notify("Mikrofon nicht gefunden", "Das gewählte Mikrofon ist nicht angeschlossen. Flüster nimmt den Systemstandard.");
+            }
+            else if (!missing) missingMicNotified = null;
+            recorder.Start(mic);
         }
         catch (Exception e)
         {
@@ -190,6 +205,7 @@ sealed class Daemon : IDisposable
         var s = store.Current;
         if (s.Sounds) Desktop.Sound("stop");
         double seconds = samples.Length / (double)AudioUtil.SampleRate;
+        if (seconds < 0.3 && recorder.LastError != null) { Fail("Aufnahme fehlgeschlagen: " + recorder.LastError + " – Mikrofon prüfen: fluester mic"); return; }
         if (seconds < 0.3) { state = State.Idle; return; }
         state = State.Processing;
         bool cmd = isCommand;
@@ -372,8 +388,15 @@ sealed class Daemon : IDisposable
                 return "beendet";
             default:
                 var s = store.Current;
-                return $"läuft · {state} · Taste: {s.Hotkey.Label(linux: true)} · Erkennung: {s.Engine.Label()} · Laufzeit: {WhisperLocalEngine.Backend ?? "noch nicht geladen"}"
-                       + (problems.Count > 0 ? "\nProbleme:\n  " + string.Join("\n  ", problems) : "");
+                var engine = s.Engine == EngineChoice.WhisperLocal
+                    ? $"{s.Engine.Label()} · {WhisperModel.ById(s.WhisperModelId).Name} · Laufzeit {WhisperLocalEngine.Backend ?? "noch nicht geladen"}"
+                    : s.Engine.Label();
+                return $"""
+                    Flüster läuft · {(state switch { State.Recording => "hört zu", State.Processing => "verarbeitet", _ => "bereit" })}
+                      Taste:     {s.Hotkey.Label(linux: true)}
+                      Mikrofon:  {Recorder.Describe(s.MicrophoneId)}
+                      Erkennung: {engine}
+                    """ + (problems.Count > 0 ? "\nProbleme:\n  " + string.Join("\n  ", problems) : "");
         }
     }
 

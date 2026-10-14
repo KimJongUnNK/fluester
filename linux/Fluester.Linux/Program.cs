@@ -21,6 +21,7 @@ static class Program
                 "setup" => Setup.Run(rest),
                 "start" => Cli.Start(),
                 "status" or "toggle" or "cancel" or "paste-last" or "stop" => Cli.Remote(cmd),
+                "mic" or "mics" or "mikro" or "mikrofon" or "microphone" or "input" => Mic.Run(rest),
                 "model" or "models" => Cli.Model(rest).GetAwaiter().GetResult(),
                 "key" => Cli.Key(rest),
                 "config" => Cli.Config(),
@@ -53,7 +54,9 @@ static class Cli
         Console.WriteLine($"""
             Flüster {Ver} – Diktieren in jeder App. Taste halten, sprechen, loslassen.
 
-              fluester setup              Einrichtung (Rechte, Werkzeuge, Taste, Modell, Autostart)
+              fluester setup              Einrichtung (Rechte, Werkzeuge, Mikrofon, Taste, Modell, Autostart)
+              fluester mic                Mikrofon wählen und Pegel testen
+              fluester mic list | test | <nummer>
               fluester start              im Hintergrund starten
               fluester run                im Vordergrund laufen lassen (zeigt Meldungen)
               fluester status             läuft er? Taste, Erkennung, Probleme
@@ -188,14 +191,17 @@ static class Cli
     {
         var store = new SettingsStore();
         using var rec = new Recorder();
-        Console.WriteLine($"Sprich jetzt 5 Sekunden lang … (Aufnahme mit {Recorder.Tool ?? "?"})");
+        var mic = Recorder.Resolve(store.Current.MicrophoneId, out bool missing);
+        if (missing) Console.WriteLine($"! „{store.Current.MicrophoneId}“ ist nicht angeschlossen – nehme den Systemstandard.");
+        Console.WriteLine($"Sprich jetzt 5 Sekunden lang … (Mikrofon: {Recorder.Describe(mic)}, Aufnahme mit {Recorder.Tool ?? "?"})");
         float peak = 0;
         rec.Level += l => peak = Math.Max(peak, l);
-        rec.Start(store.Current.MicrophoneId);
+        rec.Start(mic);
         for (int i = 5; i > 0; i--) { Console.Write($"\r  {i} "); await Task.Delay(1000); }
         var samples = rec.Stop();
-        Console.WriteLine($"\r  {samples.Length / 16000.0:0.0} s aufgenommen, Pegel max. {peak:P0}");
-        if (!AudioUtil.HasSpeech(samples, AudioUtil.SampleRate)) { Console.WriteLine("✗ Keine Sprache erkannt – Mikrofon stumm? (pavucontrol / Einstellungen › Ton)"); return 1; }
+        if (rec.LastError != null) { Console.WriteLine("\r✗ Aufnahme fehlgeschlagen: " + rec.LastError + " – anderes Mikrofon: fluester mic"); return 1; }
+        Console.WriteLine($"\r  {samples.Length / 16000.0:0.0} s aufgenommen, Pegel max. {(int)(peak * 100)} %");
+        if (!AudioUtil.HasSpeech(samples, AudioUtil.SampleRate)) { Console.WriteLine("✗ Keine Sprache erkannt – Mikrofon stumm oder falsches gewählt? Wählen und Pegel prüfen: fluester mic"); return 1; }
         var svc = new DictationService(new FileSecretStore());
         var sw = Stopwatch.StartNew();
         var result = await svc.ProcessAsync(samples, store.Current, TargetApp.Unknown, false, null, CancellationToken.None);

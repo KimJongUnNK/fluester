@@ -43,7 +43,9 @@ sealed class AudioRecorder : IDisposable
         using var en = new MMDeviceEnumerator();
         if (!string.IsNullOrEmpty(id))
         {
-            try { return en.GetDevice(id); } catch { /* abgesteckt → Standard */ }
+            // Abgesteckte Geräte liefert GetDevice weiterhin (Zustand „Unplugged“) – dann den Standard nehmen
+            try { var d = en.GetDevice(id); if (d.State == DeviceState.Active) return d; } catch { }
+            Fluester.Engine.Log.Write("Gewähltes Mikrofon nicht angeschlossen – nehme den Standard");
         }
         try { return en.GetDefaultAudioEndpoint(DataFlow.Capture, Role.Communications); }
         catch { return null; }

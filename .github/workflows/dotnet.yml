@@ -62,6 +62,51 @@ jobs:
             FLUESTER_SELFTEST_WHISPER=base FLUESTER_SELFTEST_WAV="$RUNNER_TEMP/jfk.wav" FLUESTER_SELFTEST_EXPECT=country \
             xvfb-run -a dist/linux-x64/fluester selftest
 
+      - name: Mikrofon-Auswahl (virtuelle Mikrofone über PulseAudio)
+        run: |
+          sudo apt-get install -y -qq pulseaudio pulseaudio-utils
+          export XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR:-$RUNNER_TEMP/xdg}"
+          mkdir -p "$XDG_RUNTIME_DIR" && chmod 700 "$XDG_RUNTIME_DIR"
+          pulseaudio -D --exit-idle-time=-1 -n --load=module-native-protocol-unix
+          sleep 1
+          pactl load-module module-sine-source source_name=fluester_sine rate=16000 frequency=440 source_properties=device.description=Sinus-Mikrofon
+          pactl load-module module-null-source source_name=fluester_stille
+          pactl load-module module-null-sink sink_name=lautsprecher
+          pactl set-default-source fluester_sine
+          export FLUESTER_HOME="$RUNNER_TEMP/mic-home"
+          f=dist/linux-x64/fluester
+
+          echo "::group::Liste ohne Lautsprecher-Monitor"
+          $f mic list | tee mics.txt
+          grep -q "Sinus-Mikrofon" mics.txt
+          if grep -qi "monitor" mics.txt; then echo "Monitor gelistet"; exit 1; fi
+          echo "::endgroup::"
+
+          echo "::group::Gewähltes Mikrofon wird wirklich aufgenommen"
+          $f mic sinus
+          $f mic test --seconds 1
+          $f mic fluester_stille
+          if $f mic test --seconds 1; then echo "Stilles Mikrofon als Ton erkannt"; exit 1; fi
+          echo "::endgroup::"
+
+          echo "::group::Abgestecktes Mikrofon → Systemstandard"
+          python3 -c "import json,os; p=os.environ['FLUESTER_HOME']+'/settings.json'; d=json.load(open(p)); d['microphoneId']='abgesteckt'; json.dump(d,open(p,'w'))"
+          $f mic test --seconds 1 | tee fallback.txt
+          grep -q "nicht angeschlossen" fallback.txt
+          echo "::endgroup::"
+
+          echo "::group::Laufender Dienst übernimmt die Wahl sofort"
+          $f mic 1
+          $f run --background > daemon.txt 2>&1 &
+          for i in $(seq 30); do $f status > /dev/null && break; sleep 0.3; done
+          $f status
+          $f mic fluester_stille
+          sleep 1
+          $f status | tee status.txt
+          grep -q "Mikrofon:  Null" status.txt
+          $f stop
+          echo "::endgroup::"
+
       - name: Installer testen
         run: |
           FLUESTER_TARBALL=dist/Fluester-Linux-x64.tar.gz FLUESTER_NO_SETUP=1 bash scripts/install.sh

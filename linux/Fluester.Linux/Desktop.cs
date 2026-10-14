@@ -33,6 +33,9 @@ static class Desktop
 
     static readonly Dictionary<string, string?> found = new();
 
+    /// <summary>Nach einer Paket-Installation neu suchen.</summary>
+    public static void Rescan() { lock (found) found.Clear(); }
+
     public static string? Which(string tool)
     {
         lock (found)
@@ -47,13 +50,16 @@ static class Desktop
         }
     }
 
-    public static (int Code, string Out, string Err) Run(string file, IEnumerable<string> args, string? stdin = null, int timeoutMs = 4000)
+    public static (int Code, string Out, string Err) Run(string file, IEnumerable<string> args, string? stdin = null, int timeoutMs = 4000,
+        bool englishOutput = false)
     {
         var psi = new ProcessStartInfo(file)
         {
             RedirectStandardOutput = true, RedirectStandardError = true, RedirectStandardInput = stdin != null, UseShellExecute = false,
             StandardOutputEncoding = Encoding.UTF8, StandardInputEncoding = stdin != null ? new UTF8Encoding(false) : null,
         };
+        // Für Ausgaben, die Flüster auswertet: unübersetzte Feldnamen („Description:“ statt „Beschreibung:“)
+        if (englishOutput) { psi.Environment["LC_ALL"] = "C.UTF-8"; psi.Environment.Remove("LANGUAGE"); }
         foreach (var a in args) psi.ArgumentList.Add(a);
         using var p = Process.Start(psi)!;
         if (stdin != null) { p.StandardInput.Write(stdin); p.StandardInput.Close(); }
@@ -238,7 +244,7 @@ static class Desktop
     }
 }
 
-/// <summary>Mikrofon über parecord (PulseAudio/PipeWire), arecord (ALSA) oder pw-record – roh, 16 kHz, mono, 16 Bit.</summary>
+/// <summary>Mikrofon über parecord (PulseAudio/PipeWire), pw-record (PipeWire) oder arecord (ALSA) – roh, 16 kHz, mono, 16 Bit.</summary>
 sealed class Recorder : IDisposable
 {
     Process? proc;
@@ -247,14 +253,90 @@ sealed class Recorder : IDisposable
     public event Action<float>? Level;
     public DateTime Started { get; private set; }
     public bool IsRecording => proc != null;
+    /// <summary>Fehlermeldung, wenn das Aufnahme-Werkzeug von selbst abgebrochen ist (sonst null).</summary>
+    public string? LastError { get; private set; }
 
-    public static string? Tool => Desktop.Which("parecord") != null ? "parecord" : Desktop.Which("arecord") != null ? "arecord"
-        : Desktop.Which("pw-record") != null ? "pw-record" : null;
+    static bool? pwRaw;
+    static bool PwRecordKnowsRaw => pwRaw ??= Desktop.Run(Desktop.Which("pw-record")!, new[] { "--help" }) is var r && (r.Out + r.Err).Contains("--raw");
+
+    static bool PipeWireRunning => Environment.GetEnvironmentVariable("XDG_RUNTIME_DIR") is { Length: > 0 } r && File.Exists(Path.Combine(r, "pipewire-0"));
+
+    /// <summary>parecord, wenn da (läuft auch über PipeWire); sonst pw-record bei laufendem PipeWire, sonst arecord.
+    /// FLUESTER_RECORDER=parecord|pw-record|arecord erzwingt ein Werkzeug.</summary>
+    public static string? Tool
+    {
+        get
+        {
+            if (Environment.GetEnvironmentVariable("FLUESTER_RECORDER") is ("parecord" or "pw-record" or "arecord") and { } forced && Desktop.Which(forced) != null) return forced;
+            return Desktop.Which("parecord") != null ? "parecord"
+                : Desktop.Which("pw-record") != null && PipeWireRunning ? "pw-record"
+                : Desktop.Which("arecord") != null ? "arecord"
+                : Desktop.Which("pw-record") != null ? "pw-record" : null;
+        }
+    }
+
+    /// <summary>Mikrofone, die das aktuelle Aufnahme-Werkzeug ansprechen kann (ohne Lautsprecher-Monitore).</summary>
+    public static List<Microphone> Devices()
+    {
+        try
+        {
+            switch (Tool)
+            {
+                case "parecord" when Desktop.Which("pactl") is { } pactl:
+                    var def = MicrophoneParser.PactlDefault(Desktop.Run(pactl, new[] { "info" }, englishOutput: true).Out);
+                    return MicrophoneParser.Pactl(Desktop.Run(pactl, new[] { "list", "sources" }, englishOutput: true).Out, def);
+                case "pw-record" when Desktop.Which("pw-dump") is { } dump:
+                    return MicrophoneParser.PwDump(Desktop.Run(dump, Array.Empty<string>(), timeoutMs: 6000).Out);
+                case "arecord":
+                    return MicrophoneParser.Arecord(Desktop.Run(Desktop.Which("arecord")!, new[] { "-L" }, englishOutput: true).Out);
+            }
+        }
+        catch (Exception e) { Log.Write("Mikrofone auflisten: " + e.Message); }
+        return new();
+    }
+
+    /// <summary>Gewähltes Mikrofon, falls es gerade angeschlossen ist – sonst "" (Systemstandard). Dauert wenige Millisekunden.</summary>
+    public static string Resolve(string deviceId, out bool missing)
+    {
+        missing = false;
+        if (deviceId.Length == 0) return "";
+        try
+        {
+            switch (Tool)
+            {
+                case "parecord" when Desktop.Which("pactl") is { } pactl:
+                    var r = Desktop.Run(pactl, new[] { "list", "short", "sources" }, timeoutMs: 1500, englishOutput: true);
+                    if (r.Code == 0) missing = !r.Out.Split('\n').Any(l => l.Split('\t') is { Length: > 1 } p && p[1] == deviceId);
+                    break;
+                case "arecord":
+                    var a = Desktop.Run(Desktop.Which("arecord")!, new[] { "-L" }, timeoutMs: 1500, englishOutput: true);
+                    if (a.Code == 0) missing = !a.Out.Split('\n').Any(l => l.TrimEnd() == deviceId);
+                    break;
+                case "pw-record" when Desktop.Which("pw-dump") is { } dump:
+                    var d = Desktop.Run(dump, Array.Empty<string>(), timeoutMs: 1500);
+                    if (d.Code == 0 && MicrophoneParser.PwDump(d.Out) is { Count: > 0 } nodes) missing = nodes.All(m => m.Id != deviceId);
+                    break;
+            }
+        }
+        catch (Exception e) { Log.Write("Mikrofon prüfen: " + e.Message); }
+        return missing ? "" : deviceId;
+    }
+
+    /// <summary>Lesbarer Name des eingestellten Mikrofons, z. B. „Systemstandard (Yeti Stereo)“.</summary>
+    public static string Describe(string deviceId, List<Microphone>? mics = null)
+    {
+        mics ??= Devices();
+        if (deviceId.Length == 0)
+            return mics.FirstOrDefault(m => m.IsDefault) is { } d ? $"Systemstandard ({d.Name})" : "Systemstandard";
+        return mics.FirstOrDefault(m => m.Id == deviceId) is { } m ? m.Name + (m.Muted ? " (stummgeschaltet)" : "")
+            : $"{deviceId} – nicht angeschlossen, solange gilt der Systemstandard";
+    }
 
     public void Start(string deviceId)
     {
         Stop();
-        var tool = Tool ?? throw new FluesterException("Kein Aufnahme-Werkzeug – pulseaudio-utils (parecord) oder alsa-utils (arecord) installieren");
+        LastError = null;
+        var tool = Tool ?? throw new FluesterException("Kein Aufnahme-Werkzeug – pulseaudio-utils (parecord), pipewire-utils (pw-record) oder alsa-utils (arecord) installieren");
         var psi = new ProcessStartInfo(Desktop.Which(tool)!) { RedirectStandardOutput = true, RedirectStandardError = true, UseShellExecute = false };
         switch (tool)
         {
@@ -267,7 +349,9 @@ sealed class Recorder : IDisposable
                 if (deviceId.Length > 0) { psi.ArgumentList.Add("-D"); psi.ArgumentList.Add(deviceId); }
                 break;
             default:
-                foreach (var a in new[] { "--raw", "--rate", "16000", "--channels", "1", "--format", "s16" }) psi.ArgumentList.Add(a);
+                // --raw gibt es erst ab PipeWire 1.2; ältere Versionen schreiben auf „-“ ohnehin rohes PCM
+                if (PwRecordKnowsRaw) psi.ArgumentList.Add("--raw");
+                foreach (var a in new[] { "--rate", "16000", "--channels", "1", "--format", "s16" }) psi.ArgumentList.Add(a);
                 if (deviceId.Length > 0) { psi.ArgumentList.Add("--target"); psi.ArgumentList.Add(deviceId); }
                 psi.ArgumentList.Add("-");
                 break;
@@ -279,14 +363,26 @@ sealed class Recorder : IDisposable
         reader = new Thread(() =>
         {
             var buf = new byte[3200];
+            List<byte>? head = new();
+            void Take(ReadOnlySpan<byte> chunk)
+            {
+                lock (pcm) if (pcm.Count < 16000 * 2 * 900) pcm.AddRange(chunk.ToArray());
+                Level?.Invoke(AudioUtil.Level(AudioUtil.FromPcm16(chunk[..(chunk.Length - chunk.Length % 2)])));
+            }
             try
             {
                 int n;
                 while ((n = stream.Read(buf, 0, buf.Length)) > 0)
                 {
-                    lock (pcm) if (pcm.Count < 16000 * 2 * 900) pcm.AddRange(buf.AsSpan(0, n).ToArray());
-                    Level?.Invoke(AudioUtil.Level(AudioUtil.FromPcm16(buf.AsSpan(0, n - n % 2))));
+                    if (head == null) { Take(buf.AsSpan(0, n)); continue; }
+                    // Anfang sammeln, bis klar ist, ob ein WAV-Kopf davor steht
+                    head.AddRange(buf.AsSpan(0, n).ToArray());
+                    if (head.Count < 256) continue;
+                    var first = head.ToArray();
+                    head = null;
+                    Take(first.AsSpan(AudioUtil.PcmStart(first)));
                 }
+                if (head is { Count: > 0 }) { var first = head.ToArray(); Take(first.AsSpan(AudioUtil.PcmStart(first))); }
             }
             catch { }
         }) { IsBackground = true, Name = "Aufnahme" };
@@ -297,32 +393,18 @@ sealed class Recorder : IDisposable
     {
         if (proc != null)
         {
+            bool died = proc.HasExited && proc.ExitCode != 0;
             try { proc.Kill(); } catch { }
             reader?.Join(1000);
-            var err = proc.StandardError.ReadToEnd();
-            if (err.Length > 0) Log.Write("Aufnahme: " + err.Trim());
+            var err = proc.StandardError.ReadToEnd().Trim();
+            if (err.Length > 0) Log.Write("Aufnahme: " + err);
+            if (died) LastError = err.Length > 0 ? err.Split('\n')[0] : $"Aufnahme-Werkzeug beendet (Code {proc.ExitCode})";
             proc.Dispose();
             proc = null;
         }
         byte[] bytes;
         lock (pcm) { bytes = pcm.ToArray(); pcm.Clear(); }
         return AudioUtil.FromPcm16(bytes.AsSpan(0, bytes.Length - bytes.Length % 2));
-    }
-
-    /// <summary>Mikrofone (PulseAudio-Quellen ohne Monitore).</summary>
-    public static List<(string Id, string Name)> Devices()
-    {
-        var list = new List<(string, string)>();
-        if (Desktop.Which("pactl") is { } pactl)
-        {
-            var r = Desktop.Run(pactl, new[] { "list", "short", "sources" });
-            foreach (var line in r.Out.Split('\n', StringSplitOptions.RemoveEmptyEntries))
-            {
-                var parts = line.Split('\t');
-                if (parts.Length > 1 && !parts[1].EndsWith(".monitor")) list.Add((parts[1], parts[1]));
-            }
-        }
-        return list;
     }
 
     public void Dispose() => Stop();
