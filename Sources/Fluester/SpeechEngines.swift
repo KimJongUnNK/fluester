@@ -14,7 +14,7 @@ enum SpeechEngines {
     static func make(_ s: Settings) -> SpeechEngine {
         switch s.engine {
         case .apple:
-            if #available(macOS 26.0, *) { return AppleSpeechEngine() }
+            if #available(macOS 26.0, *) { return AppleAutoEngine() }
             return LegacyAppleSpeechEngine()
         case .whisperLocal:
             return WhisperLocalEngine(model: WhisperModel.byID(s.whisperModelID))
@@ -72,26 +72,125 @@ final class AppleSpeechEngine: SpeechEngine {
         return (SpeechTranscriber(locale: locale, transcriptionOptions: [], reportingOptions: [], attributeOptions: []), locale)
     }
 
+    /// Sprachpaket für diese Sprache installiert?
+    static func isReady(language: String) async -> Bool {
+        guard let pair = try? await makeTranscriber(language: language) else { return false }
+        return await AssetInventory.status(forModules: [pair.0]) == .installed
+    }
+
     /// Sprachpaket reservieren und laden, falls es fehlt (einmalig, ein paar hundert MB).
-    static func ensureAssets(_ transcriber: SpeechTranscriber, locale: Locale) async throws {
+    /// `trace` protokolliert jeden Schritt (Selbsttest, Fehlersuche).
+    static func ensureAssets(_ transcriber: SpeechTranscriber, locale: Locale, trace: ((String) -> Void)? = nil) async throws {
+        let status = await AssetInventory.status(forModules: [transcriber])
+        trace?("Status vorher: \(status)")
+        if status == .installed { return }
         // Ohne Reservierung verweigert der Asset-Katalog den Download ("not subscribed")
         let reserved = await AssetInventory.reservedLocales
+        trace?("Reserviert: \(reserved.map { $0.identifier(.bcp47) }) von max. \(AssetInventory.maximumReservedLocales)")
         if !reserved.contains(where: { $0.identifier(.bcp47) == locale.identifier(.bcp47) }) {
-            let limit = await AssetInventory.maximumReservedLocales
-            if reserved.count >= limit, let oldest = reserved.first {
-                _ = await AssetInventory.release(reservedLocale: oldest)
+            if reserved.count >= AssetInventory.maximumReservedLocales, let oldest = reserved.first {
+                let released = await AssetInventory.release(reservedLocale: oldest)
+                trace?("Freigegeben: \(oldest.identifier(.bcp47)) → \(released)")
             }
-            _ = try await AssetInventory.reserve(locale: locale)
+            let ok = try await AssetInventory.reserve(locale: locale)
+            trace?("Reservieren \(locale.identifier(.bcp47)) → \(ok)")
         }
         if let request = try await AssetInventory.assetInstallationRequest(supporting: [transcriber]) {
+            trace?("Lade Sprachpaket …")
             try await request.downloadAndInstall()
+        }
+        let after = await AssetInventory.status(forModules: [transcriber])
+        trace?("Status nachher: \(after)")
+        if after == .unsupported {
+            throw FluesterError("Apple-Sprachpaket für „\(locale.identifier)“ gibt es auf diesem Mac nicht – Whisper oder Cloud wählen")
         }
     }
 
     /// Für die Einstellungen: Sprachpaket vorab laden.
-    static func prepare(language: String) async throws {
+    static func prepare(language: String, trace: ((String) -> Void)? = nil) async throws {
         let (t, locale) = try await makeTranscriber(language: language)
-        try await ensureAssets(t, locale: locale)
+        trace?("Sprache: \(locale.identifier(.bcp47))")
+        try await ensureAssets(t, locale: locale, trace: trace)
+    }
+}
+
+// MARK: - Apple mit Rückfall: SpeechAnalyzer, bei Problemen die ältere Erkennung
+
+/// Standard-Engine unter macOS 26. Ist das Sprachpaket noch nicht da, wird es im Hintergrund geladen und
+/// dieses Diktat läuft über SFSpeechRecognizer – niemand wartet auf einen Download. Fällt SpeechAnalyzer aus,
+/// gilt dasselbe; der neue Weg wird nach 10 Minuten erneut versucht.
+@available(macOS 26.0, *)
+final class AppleAutoEngine: SpeechEngine {
+    private static let lock = NSLock()
+    nonisolated(unsafe) private static var analyzerFailedAt: Date?
+    nonisolated(unsafe) private static var analyzerError: String?
+    nonisolated(unsafe) private static var preparing = false
+
+    private var usedLegacy = false
+    var name: String { usedLegacy ? "Apple Spracherkennung" : "Apple SpeechAnalyzer" }
+
+    /// Warum gerade die ältere Erkennung läuft (Menü, Einstellungen), nil = SpeechAnalyzer ist aktiv.
+    static var fallbackReason: String? {
+        lock.lock(); defer { lock.unlock() }
+        if preparing { return "Sprachpaket wird geladen" }
+        return analyzerFailedAt == nil ? nil : analyzerError
+    }
+
+    func transcribe(_ samples: [Float], sampleRate: Double, language: String, hints: [String]) async throws -> String {
+        if Self.shouldTryAnalyzer() {
+            if await AppleSpeechEngine.isReady(language: language) {
+                do {
+                    let text = try await AppleSpeechEngine().transcribe(samples, sampleRate: sampleRate, language: language, hints: hints)
+                    Self.record(error: nil)
+                    return text
+                } catch is CancellationError {
+                    throw CancellationError()
+                } catch {
+                    Self.record(error: error.localizedDescription)
+                }
+            } else {
+                Self.prepareInBackground(language: language)
+            }
+        }
+        usedLegacy = true
+        do {
+            return try await withTimeout(90) {
+                try await LegacyAppleSpeechEngine().transcribe(samples, sampleRate: sampleRate, language: language, hints: hints)
+            }
+        } catch is CancellationError {
+            throw CancellationError()
+        } catch {
+            let first = Self.fallbackReason.map { "SpeechAnalyzer: \($0) · " } ?? ""
+            throw FluesterError(first + "Ältere Erkennung: " + error.localizedDescription)
+        }
+    }
+
+    /// Sprachpaket einmal im Hintergrund laden; Fehler merken, damit nicht jedes Diktat es neu versucht.
+    static func prepareInBackground(language: String) {
+        lock.lock()
+        if preparing { lock.unlock(); return }
+        preparing = true
+        lock.unlock()
+        Task.detached(priority: .utility) {
+            var failure: String?
+            do { try await AppleSpeechEngine.prepare(language: language) } catch { failure = error.localizedDescription }
+            AppleAutoEngine.record(error: failure, finishedPreparing: true)
+        }
+    }
+
+    private static func shouldTryAnalyzer() -> Bool {
+        lock.lock(); defer { lock.unlock() }
+        if preparing { return false }
+        guard let t = analyzerFailedAt else { return true }
+        return Date().timeIntervalSince(t) > 600
+    }
+
+    /// Ergebnis merken. nil = SpeechAnalyzer bereit (auch nach „Jetzt laden“ in den Einstellungen).
+    static func record(error: String?, finishedPreparing: Bool = false) {
+        lock.lock(); defer { lock.unlock() }
+        if finishedPreparing { preparing = false }
+        analyzerFailedAt = error == nil ? nil : Date()
+        analyzerError = error
     }
 }
 

@@ -23,6 +23,13 @@ struct OnboardingView: View {
                             Permissions.promptAccessibility()
                             Permissions.openPrivacy("Privacy_Accessibility")
                         }
+                        if store.s.engine == .apple {
+                            PermissionRow(title: "Spracherkennung", detail: "Für die Apple-Erkennung, solange das neue Sprachpaket im Hintergrund lädt.",
+                                          ok: Permissions.speechRecognitionGranted) {
+                                if Permissions.speechRecognitionUndetermined { Permissions.requestSpeechRecognition() }
+                                else { Permissions.openPrivacy("Privacy_SpeechRecognition") }
+                            }
+                        }
                     }
                 }
                 step(2, "Diktat-Taste") {

@@ -3,6 +3,7 @@ import AVFoundation
 import ApplicationServices
 import ServiceManagement
 import Security
+import Speech
 import FluesterCore
 
 /// Ordner in ~/Library/Application Support/Fluester
@@ -28,17 +29,71 @@ func onMain(after seconds: Double = 0, _ work: @escaping @MainActor () -> Void) 
     }
 }
 
-/// Wartet höchstens `seconds` auf eine Operation.
+/// Wartet höchstens `seconds` auf eine Operation. Kehrt auch dann zurück, wenn die Operation
+/// Abbrechen ignoriert (z. B. ein Callback, der nie kommt) – eine Task-Group würde darauf warten.
 func withTimeout<T: Sendable>(_ seconds: Double, _ operation: @escaping @Sendable () async throws -> T) async throws -> T {
-    try await withThrowingTaskGroup(of: T.self) { group in
-        group.addTask { try await operation() }
-        group.addTask {
-            try await Task.sleep(nanoseconds: UInt64(seconds * 1_000_000_000))
-            throw FluesterError("Zeitüberschreitung nach \(Int(seconds)) s")
+    let gate = OnceGate<T>()
+    return try await withTaskCancellationHandler {
+        try await withCheckedThrowingContinuation { (cont: CheckedContinuation<T, Error>) in
+            gate.arm(cont)
+            let work = Task {
+                do { gate.resume(.success(try await operation())) } catch { gate.resume(.failure(error)) }
+            }
+            let timer = Task {
+                try? await Task.sleep(nanoseconds: UInt64(seconds * 1_000_000_000))
+                gate.resume(.failure(FluesterError("Zeitüberschreitung nach \(Int(seconds)) s")))
+            }
+            gate.attach(work, timer)
         }
-        guard let first = try await group.next() else { throw FluesterError("Keine Antwort") }
-        group.cancelAll()
-        return first
+    } onCancel: {
+        gate.resume(.failure(CancellationError()))
+    }
+}
+
+/// Setzt eine Continuation genau einmal fort und räumt die beteiligten Tasks ab.
+private final class OnceGate<T: Sendable>: @unchecked Sendable {
+    private let lock = NSLock()
+    private var cont: CheckedContinuation<T, Error>?
+    private var done = false
+    private var pending: Result<T, Error>?
+    private var tasks: [Task<Void, Never>] = []
+
+    func arm(_ c: CheckedContinuation<T, Error>) {
+        lock.lock()
+        if let r = pending {
+            pending = nil
+            lock.unlock()
+            c.resume(with: r)
+            return
+        }
+        cont = c
+        lock.unlock()
+    }
+
+    func attach(_ work: Task<Void, Never>, _ timer: Task<Void, Never>) {
+        lock.lock()
+        if done {
+            lock.unlock()
+            work.cancel()
+            timer.cancel()
+            return
+        }
+        tasks = [work, timer]
+        lock.unlock()
+    }
+
+    func resume(_ result: Result<T, Error>) {
+        lock.lock()
+        guard !done else { lock.unlock(); return }
+        done = true
+        let c = cont
+        cont = nil
+        if c == nil { pending = result }   // Abbruch kam vor arm()
+        let running = tasks
+        tasks = []
+        lock.unlock()
+        c?.resume(with: result)
+        running.forEach { $0.cancel() }
     }
 }
 
@@ -90,6 +145,10 @@ enum Permissions {
             DispatchQueue.main.async { done(ok) }
         }
     }
+
+    static var speechRecognitionGranted: Bool { SFSpeechRecognizer.authorizationStatus() == .authorized }
+    static var speechRecognitionUndetermined: Bool { SFSpeechRecognizer.authorizationStatus() == .notDetermined }
+    static func requestSpeechRecognition() { SFSpeechRecognizer.requestAuthorization { _ in } }
 
     static var accessibility: Bool { AXIsProcessTrusted() }
 

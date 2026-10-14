@@ -99,7 +99,7 @@ final class DictationController {
         }
         if s.engine == .apple {
             if #available(macOS 26.0, *) {
-                Task.detached { try? await AppleSpeechEngine.prepare(language: s.language) }
+                AppleAutoEngine.prepareInBackground(language: s.language)
             }
         }
     }

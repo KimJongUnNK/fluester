@@ -134,6 +134,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         }
         engineItem.submenu = engineMenu
         menu.addItem(engineItem)
+        if #available(macOS 26.0, *) {
+            if s.engine == .apple, let reason = AppleAutoEngine.fallbackReason {
+                let fb = NSMenuItem(title: "   Ältere Apple-Erkennung aktiv: " + reason, action: nil, keyEquivalent: "")
+                fb.isEnabled = false
+                menu.addItem(fb)
+            }
+        }
         let cleanupItem = NSMenuItem(title: "KI: " + s.cleanup.label, action: nil, keyEquivalent: "")
         let cleanupMenu = NSMenu()
         for c in CleanupChoice.allCases {

@@ -77,21 +77,40 @@ enum SelfTest {
                 log("✗ Whisper: \(error.localizedDescription)")
             }
             await WhisperServer.shared.stop()
+            for line in whisperBackendLines() { log("  · " + line) }
         }
 
-        // 6) Apple SpeechAnalyzer (macOS 26). In der CI-VM ggf. ohne Sprachpaket → nur Hinweis
+        // 6) Apple (macOS 26). In der CI-VM ggf. ohne Sprachpaket → nur Hinweise, außer ausdrücklich verlangt
         if #available(macOS 26.0, *) {
+            let appleRequired = env["FLUESTER_SELFTEST_APPLE_REQUIRED"] != nil
+            log("Apple-Sprachpaket:")
+            do {
+                try await withTimeout(300) { try await AppleSpeechEngine.prepare(language: "en-US", trace: { log("  · " + $0) }) }
+                log("  ✓ bereit")
+            } catch {
+                log("  ⚠︎ \(error.localizedDescription)")
+            }
             do {
                 let start = Date()
-                let text = try await withTimeout(300) { try await AppleSpeechEngine().transcribe(trimmed, sampleRate: 16000, language: "en-US", hints: []) }
+                let text = try await withTimeout(120) { try await AppleSpeechEngine().transcribe(trimmed, sampleRate: 16000, language: "en-US", hints: []) }
                 log(String(format: "Apple SpeechAnalyzer: „%@“ in %.1f s", text, Date().timeIntervalSince(start)))
                 if text.lowercased().contains("test") { log("  ✓") } else {
-                    if env["FLUESTER_SELFTEST_APPLE_REQUIRED"] != nil { ok = false }
+                    if appleRequired { ok = false }
                     log("  ⚠︎ Text passt nicht")
                 }
             } catch {
-                if env["FLUESTER_SELFTEST_APPLE_REQUIRED"] != nil { ok = false }
+                if appleRequired { ok = false }
                 log("⚠︎ Apple SpeechAnalyzer: \(error.localizedDescription)")
+            }
+            // Standard-Engine der App: SpeechAnalyzer oder Rückfall auf SFSpeechRecognizer
+            let auto = AppleAutoEngine()
+            do {
+                let start = Date()
+                let text = try await withTimeout(120) { try await auto.transcribe(trimmed, sampleRate: 16000, language: "en-US", hints: []) }
+                log(String(format: "Apple (Standard, %@): „%@“ in %.1f s", auto.name, text, Date().timeIntervalSince(start)))
+                log(text.lowercased().contains("test") ? "  ✓" : "  ⚠︎ Text passt nicht")
+            } catch {
+                log("⚠︎ Apple (Standard): \(error.localizedDescription)")
             }
         }
 
@@ -103,6 +122,17 @@ enum SelfTest {
             log("Apple Intelligence: „\(r.text)“ \(r.warning ?? "")")
         }
         return ok
+    }
+
+    /// Aus dem whisper-server-Log: läuft Metal (GPU) oder nur die CPU?
+    static func whisperBackendLines() -> [String] {
+        guard let text = try? String(contentsOf: WhisperServer.logURL, encoding: .utf8) else { return [] }
+        let keys = ["metal", "gpu", "backend", "device"]
+        let hits = text.split(separator: "\n").map(String.init).filter { line in
+            let l = line.lowercased()
+            return keys.contains { l.contains($0) }
+        }
+        return Array(hits.prefix(6)).map { String($0.prefix(160)) }
     }
 
     /// Text mit `say` sprechen lassen und als 16 kHz-Samples laden.

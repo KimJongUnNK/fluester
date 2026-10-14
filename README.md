@@ -21,7 +21,7 @@ Flüster ist ein eigener Nachbau und enthält keinen Code von Wispr Flow. Sprach
 | Preis | **0 €** | 15 $/Monat |
 
 **Erkennung (wählbar):**
-- **Apple (auf dem Mac):** macOS 26 SpeechAnalyzer, offline, keine Einrichtung. Unter macOS 14/15 die ältere Apple-Erkennung.
+- **Apple (auf dem Mac):** macOS 26 SpeechAnalyzer, offline, keine Einrichtung. Das Sprachpaket lädt beim ersten Start im Hintergrund. So lange, oder falls SpeechAnalyzer streikt, springt automatisch die ältere Apple-Erkennung ein. Unter macOS 14/15 läuft immer die ältere.
 - **Whisper lokal:** whisper.cpp mit Large-v3-Turbo, offline, sehr genau, auch gemischt Deutsch/Englisch.
 - **Cloud:** Groq (Gratis-Kontingent von ca. 8 h Audio pro Tag), OpenAI oder jeder OpenAI-kompatible Server.
 
@@ -52,8 +52,9 @@ Das baut, signiert, kopiert die App nach `/Applications` und startet sie.
 ## Einrichten (einmalig, die App führt durch)
 1. **Mikrofon** erlauben.
 2. **Bedienungshilfen** erlauben: Flüster in der Liste einschalten. Das braucht die App für die Fn-Taste und zum Einfügen.
-3. **Fn/🌐-Taste:** Systemeinstellungen › Tastatur › „🌐-Taste drücken zum“ auf **„Keine Aktion“** stellen. Sonst öffnet sich das Emoji-Fenster. Alternativ in Flüster rechte ⌥, ⌘ oder ⌃ als Taste wählen.
-4. Fertig. Fn halten und sprechen.
+3. **Spracherkennung** erlauben (nur bei „Apple“, für die ältere Erkennung, solange das Sprachpaket lädt).
+4. **Fn/🌐-Taste:** Systemeinstellungen › Tastatur › „🌐-Taste drücken zum“ auf **„Keine Aktion“** stellen. Sonst öffnet sich das Emoji-Fenster. Alternativ in Flüster rechte ⌥, ⌘ oder ⌃ als Taste wählen.
+5. Fertig. Fn halten und sprechen.
 
 **Optional, für die beste Qualität:**
 - **Whisper lokal:** `brew install whisper-cpp`, dann unter Einstellungen › Erkennung das Modell „Large v3 Turbo“ laden (547 MB).
@@ -76,6 +77,7 @@ Das baut, signiert, kopiert die App nach `/Applications` und startet sie.
 - **Taste reagiert nicht:** Unter Bedienungshilfen ist Flüster nicht erlaubt, oder nach einem Update passt die Freigabe nicht mehr. Dann Flüster in der Liste entfernen (–) und neu hinzufügen (+). `INSTALL=1` setzt die Freigabe automatisch zurück.
 - **Emoji-Fenster geht auf:** 🌐-Taste auf „Keine Aktion“ stellen (siehe oben).
 - **Nichts wird eingefügt:** Manche Felder nehmen kein ⌘V an. Dann unter Einstellungen › Allgemein die Methode „Tippen“ wählen. Der Text liegt außerdem im Verlauf.
+- **Menü zeigt „Ältere Apple-Erkennung aktiv“:** Das neue Sprachpaket lädt noch oder ließ sich nicht laden. Unter Einstellungen › Erkennung auf „Jetzt laden“ klicken, der Grund steht daneben. Diktieren geht in der Zwischenzeit trotzdem. Wer es sofort am genauesten will, wechselt auf Whisper lokal.
 - **Apple Intelligence nicht verfügbar:** Systemeinstellungen › Apple Intelligence & Siri einschalten. Bis dahin gelten automatisch die Regeln.
 
 ## Entwicklung

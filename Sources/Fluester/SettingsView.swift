@@ -217,6 +217,7 @@ struct RecognitionPane: View {
                         Task {
                             do {
                                 try await AppleSpeechEngine.prepare(language: lang)
+                                AppleAutoEngine.record(error: nil)
                                 appleStatus = "Bereit ✓"
                             } catch {
                                 appleStatus = error.localizedDescription
@@ -225,6 +226,10 @@ struct RecognitionPane: View {
                         }
                     }
                     .disabled(appleBusy)
+                }
+                if let reason = AppleAutoEngine.fallbackReason {
+                    Text("Gerade aktiv: ältere Apple-Erkennung (\(reason)). Flüster wechselt automatisch zurück, sobald SpeechAnalyzer bereit ist.")
+                        .font(.callout).foregroundStyle(.secondary)
                 }
             } else {
                 LabeledContent("Engine", value: "SFSpeechRecognizer (macOS 14/15)")
@@ -679,6 +684,11 @@ struct PermissionsPane: View {
                                   ok: Permissions.accessibility, action: {
                         Permissions.promptAccessibility()
                         Permissions.openPrivacy("Privacy_Accessibility")
+                    })
+                    PermissionRow(title: "Spracherkennung (optional)", detail: "Nur für die ältere Apple-Erkennung, die einspringt, solange das neue Sprachpaket lädt.",
+                                  ok: Permissions.speechRecognitionGranted, action: {
+                        if Permissions.speechRecognitionUndetermined { Permissions.requestSpeechRecognition() }
+                        else { Permissions.openPrivacy("Privacy_SpeechRecognition") }
                     })
                     PermissionRow(title: "Diktat-Taste aktiv", detail: "Startet automatisch, sobald Bedienungshilfen erlaubt sind.",
                                   ok: delegate.hotkeyActive, actionTitle: "Neu starten", action: { delegate.restartHotkey() })
