@@ -66,6 +66,12 @@ static class Desktop
         var outTask = p.StandardOutput.ReadToEndAsync();
         var errTask = p.StandardError.ReadToEndAsync();
         if (!p.WaitForExit(timeoutMs)) { try { p.Kill(true); } catch { } return (-1, "", "Zeitüberschreitung"); }
+        // Hintergrund-Kinder (z. B. von wl-paste/xclip) können die Ausgabe offen halten – nie endlos darauf warten
+        if (!Task.WaitAll(new Task[] { outTask, errTask }, Math.Max(300, timeoutMs / 2)))
+        {
+            Log.Write($"{Path.GetFileName(file)}: Ausgabe blieb offen – übersprungen");
+            return (p.ExitCode, outTask.IsCompletedSuccessfully ? outTask.Result : "", errTask.IsCompletedSuccessfully ? errTask.Result : "");
+        }
         return (p.ExitCode, outTask.Result, errTask.Result);
     }
 
@@ -396,7 +402,8 @@ sealed class Recorder : IDisposable
             bool died = proc.HasExited && proc.ExitCode != 0;
             try { proc.Kill(); } catch { }
             reader?.Join(1000);
-            var err = proc.StandardError.ReadToEnd().Trim();
+            var errTask = proc.StandardError.ReadToEndAsync();
+            var err = errTask.Wait(1000) ? errTask.Result.Trim() : "";
             if (err.Length > 0) Log.Write("Aufnahme: " + err);
             if (died) LastError = err.Length > 0 ? err.Split('\n')[0] : $"Aufnahme-Werkzeug beendet (Code {proc.ExitCode})";
             proc.Dispose();

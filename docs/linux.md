@@ -92,8 +92,8 @@ fluester setup              Einrichtung erneut starten
 fluester mic                Mikrofon wählen und Pegel testen
 fluester mic list | test | <nummer>
 fluester status             läuft er? Taste, Mikrofon, Erkennung, Probleme
-fluester start | stop       Dienst starten / beenden
-fluester run                im Vordergrund laufen lassen (zeigt alle Meldungen)
+fluester start | stop       Dienst starten / beenden (läuft unabhängig vom Terminal weiter)
+fluester run                im Vordergrund laufen lassen (zeigt alle Meldungen, endet mit dem Terminal)
 fluester toggle             freihändig starten/beenden – für eigene Tastenkürzel
 fluester paste-last         letztes Diktat erneut einfügen
 fluester test               5 Sekunden aufnehmen und erkennen (ohne Einfügen)
@@ -145,7 +145,16 @@ Einstellungen (`~/.config/fluester`), Verlauf und Modelle (`~/.local/share/flues
 
 ## Häufige Probleme
 
-Der erste Schritt ist immer **`fluester status`**. Der Befehl listet erkannte Probleme samt Lösung auf.
+Der erste Schritt ist immer **`fluester status`**. Der Befehl listet erkannte Probleme samt Lösung auf. Jeder Schritt jedes Diktats steht außerdem im Protokoll: `tail -40 ~/.local/share/fluester/fluester.log`. Dort stehen Aufnahme, Erkennung mit Dauer und Einfügen, aber nie der diktierte Text.
+
+**Es klappt einmal, danach nicht mehr.**
+Ab Version 1.1.2 fängt Flüster das selbst ab:
+- **Terminal geschlossen:** `fluester start` startet Flüster als eigenen Dienst (systemd-Einheit `fluester`, sonst in eigener Sitzung). Schließt du das Terminal, läuft Flüster weiter. Nur `fluester run` hängt bewusst am Terminal.
+- **Erkennung hängt**, etwa weil der Grafikkarten-Treiber bei Vulkan klemmt: Nach einer Zeitgrenze startet Flüster neu und rechnet ab dann mit dem Prozessor (`useGpu` wird `false`). Du bekommst dazu eine Meldung.
+- **Dienst hängt** an einem Werkzeug, das nicht antwortet: Ein Wächter startet Flüster nach 25 Sekunden neu.
+- **Absturz:** Als systemd-Einheit startet Flüster nach 2 Sekunden von selbst wieder. Der Grund steht im Protokoll unter „ABSTURZ“.
+
+Drückst du die Taste, während das letzte Diktat noch erkannt wird, kommt die Meldung „Moment …“, statt dass nichts passiert. Dauert die Erkennung spürbar lange, nimm ein kleineres Modell (`fluester model download small`).
 
 **Die Taste reagiert nicht, oder „Kein Zugriff auf /dev/input/event…“.**
 Flüster liest die Tastatur nur mit der Gruppe `input`. Die wirkt erst in Programmen, die nach dem nächsten Anmelden starten.

@@ -220,9 +220,10 @@ sealed class HotkeyTracker
 }
 
 /// <summary>Virtuelle Tastatur über /dev/uinput: sendet Strg+V & Co. – unter X11 und Wayland, auf GNOME, KDE, Sway, Hyprland.</summary>
-sealed class VirtualKeyboard : IDisposable
+sealed class VirtualKeyboard(string name = KeyboardWatcher.VirtualKeyboardName, bool repeat = false) : IDisposable
 {
     const nuint UI_SET_EVBIT = 0x40045564, UI_SET_KEYBIT = 0x40045565, UI_DEV_SETUP = 0x405C5503, UI_DEV_CREATE = 0x5501, UI_DEV_DESTROY = 0x5502;
+    const ushort EV_REP = 0x14;
     int fd = -1;
 
     public static bool Available => File.Exists("/dev/uinput");
@@ -238,6 +239,8 @@ sealed class VirtualKeyboard : IDisposable
                 : "/dev/uinput nicht verfügbar (Fehler " + Marshal.GetLastWin32Error() + ")";
         Libc.ioctl(fd, UI_SET_EVBIT, Keys.EV_KEY);
         Libc.ioctl(fd, UI_SET_EVBIT, Keys.EV_SYN);
+        // Mit Tastenwiederholung sieht das Gerät aus wie eine echte Tastatur (für Ende-zu-Ende-Tests)
+        if (repeat) Libc.ioctl(fd, UI_SET_EVBIT, EV_REP);
         foreach (var k in new ushort[] { Keys.LEFTCTRL, Keys.LEFTSHIFT, Keys.V, Keys.C, Keys.INSERT, Keys.RIGHTCTRL, Keys.F8, Keys.CAPSLOCK, Keys.RIGHTALT, Keys.LEFTMETA })
             Libc.ioctl(fd, UI_SET_KEYBIT, k);
         // struct uinput_setup { input_id {bustype, vendor, product, version}; char name[80]; u32 ff_effects_max; }
@@ -246,7 +249,7 @@ sealed class VirtualKeyboard : IDisposable
         BitConverter.TryWriteBytes(setup.AsSpan(2, 2), (ushort)0x464C); // "FL"
         BitConverter.TryWriteBytes(setup.AsSpan(4, 2), (ushort)0x5354); // "ST"
         BitConverter.TryWriteBytes(setup.AsSpan(6, 2), (ushort)1);
-        System.Text.Encoding.ASCII.GetBytes(KeyboardWatcher.VirtualKeyboardName).CopyTo(setup, 8);
+        System.Text.Encoding.ASCII.GetBytes(name).CopyTo(setup, 8);
         if (Libc.ioctl(fd, UI_DEV_SETUP, setup) < 0 || Libc.ioctl(fd, UI_DEV_CREATE) < 0)
         {
             Libc.close(fd);

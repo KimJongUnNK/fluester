@@ -1,6 +1,7 @@
 using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.Net.Sockets;
+using System.Runtime.InteropServices;
 using System.Text;
 using Fluester.Core;
 using Fluester.Engine;
@@ -41,7 +42,10 @@ sealed class Daemon : IDisposable
     public Daemon() => service = new DictationService(secrets);
 
     double Now => clock.Elapsed.TotalSeconds;
-    void Post(Action a) => queue.Add(a);
+    void Post(Action a)
+    {
+        try { queue.Add(a); } catch (InvalidOperationException) { /* Dienst endet gerade */ }
+    }
 
     public int Run()
     {
@@ -74,19 +78,82 @@ sealed class Daemon : IDisposable
         Prewarm();
 
         var timer = new Timer(_ => Post(Tick), null, 50, 50);
-        Console.CancelKeyPress += (_, e) => { e.Cancel = true; queue.CompleteAdding(); };
-        AppDomain.CurrentDomain.ProcessExit += (_, _) => { try { queue.CompleteAdding(); } catch { } };
+        Console.CancelKeyPress += (_, e) => { e.Cancel = true; Shutdown("Strg+C"); };
+        // Terminal geschlossen: weiterlaufen. Beenden nur über „fluester stop“, SIGTERM oder Abmelden.
+        using var hup = PosixSignalRegistration.Create(PosixSignal.SIGHUP, c => { c.Cancel = true; Log.Write("SIGHUP ignoriert (Terminal geschlossen?)"); });
+        using var term = PosixSignalRegistration.Create(PosixSignal.SIGTERM, _ => Log.Write("SIGTERM – beende"));
+        AppDomain.CurrentDomain.ProcessExit += (_, _) =>
+        {
+            Shutdown("Prozessende");
+            try { recorder.Stop(); } catch { }
+        };
+        StartWatchdog();
         var s0 = store.Current;
         if (s0.Notifications) Desktop.Notify("Flüster ist bereit", $"{s0.Hotkey.Label(linux: true)} halten, sprechen, loslassen.");
 
         foreach (var action in queue.GetConsumingEnumerable())
         {
+            busySince = clock.Elapsed.TotalSeconds;
             try { action(); }
             catch (Exception e) { Log.Write("Dienst: " + e); }
+            busySince = -1;
         }
         timer.Dispose();
-        Log.Write("Dienst beendet");
+        Log.Write("Dienst beendet (" + (stopReason ?? "?") + ")");
         return 0;
+    }
+
+    string? stopReason;
+    double busySince = -1;
+
+    void Shutdown(string reason)
+    {
+        stopReason ??= reason;
+        try { queue.CompleteAdding(); } catch { }
+    }
+
+    double processingSince, processingLimit = double.MaxValue;
+
+    /// <summary>Die Erkennung kommt nicht zurück (z. B. Grafikkarten-Treiber hängt): statt für immer „verarbeitet“ zu bleiben,
+    /// auf den Prozessor umstellen (falls die Grafikkarte rechnete) und neu starten.</summary>
+    void ProcessingStuck()
+    {
+        var s = store.Current;
+        double waited = clock.Elapsed.TotalSeconds - processingSince;
+        bool gpu = s.Engine == EngineChoice.WhisperLocal && s.UseGpu && WhisperLocalEngine.Backend is { } b && !b.StartsWith("Cpu");
+        Log.Write($"Erkennung hängt seit {waited:0} s (Laufzeit {WhisperLocalEngine.Backend ?? "?"}) – {(gpu ? "schalte auf Prozessor um und " : "")}starte neu");
+        if (gpu) store.Update(x => x.UseGpu = false);
+        if (s.Notifications)
+            Desktop.Notify("Flüster startet neu", gpu
+                ? "Die Grafikkarte hing bei der Erkennung. Flüster rechnet ab jetzt mit dem Prozessor – gleich wieder bereit."
+                : "Die Erkennung hing. Flüster ist gleich wieder bereit.", urgent: true);
+        Restart(70);
+    }
+
+    /// <summary>Sauber neu starten: unter systemd übernimmt die Einheit den Neustart, sonst startet Flüster sich selbst.</summary>
+    void Restart(int code)
+    {
+        try { recorder.Stop(); } catch { }
+        try { server?.Dispose(); File.Delete(SocketPath); } catch { }
+        if (Environment.GetEnvironmentVariable("INVOCATION_ID") == null) Cli.StartDetached();
+        Environment.Exit(code);
+    }
+
+    /// <summary>Wächter: Hängt die Ereignis-Schleife (ein externes Werkzeug antwortet nicht), startet Flüster sich selbst neu,
+    /// statt bis zum nächsten manuellen Start taub zu bleiben.</summary>
+    void StartWatchdog()
+    {
+        new Thread(() =>
+        {
+            while (!queue.IsAddingCompleted)
+            {
+                Thread.Sleep(2000);
+                var since = busySince;
+                if (since < 0 || clock.Elapsed.TotalSeconds - since < 25) continue;
+                Log.Write($"Wächter: Dienst hängt seit {clock.Elapsed.TotalSeconds - since:0} s (Zustand {state}) – starte neu");
+                Restart(70);
+            }
+        }) { IsBackground = true, Name = "Wächter" }.Start();
     }
 
     void Problem(string msg)
@@ -145,6 +212,7 @@ sealed class Daemon : IDisposable
         var a = gestures.Tick(Now);
         if (a.Kind != HotkeyGestures.Kind.None) Handle(a);
         if (state == State.Recording && (DateTime.UtcNow - recorder.Started).TotalSeconds > 900) Finish();
+        if (state == State.Processing && clock.Elapsed.TotalSeconds - processingSince > processingLimit) ProcessingStuck();
     }
 
     void Handle(HotkeyGestures.Action a)
@@ -162,7 +230,18 @@ sealed class Daemon : IDisposable
 
     void Begin(bool command)
     {
-        if (state != State.Idle) { if (state == State.Processing) gestures.Reset(); return; }
+        if (state != State.Idle)
+        {
+            if (state == State.Processing)
+            {
+                // Sichtbar machen statt still zu ignorieren
+                gestures.Reset();
+                double busy = clock.Elapsed.TotalSeconds - processingSince;
+                Log.Write($"Taste während der Erkennung gedrückt (läuft seit {busy:0.0} s)");
+                if (store.Current.Notifications) Desktop.Notify("Moment …", $"Das letzte Diktat wird noch erkannt ({busy:0} s).");
+            }
+            return;
+        }
         target = Desktop.ActiveWindow();
         isCommand = command;
         selection = command ? Desktop.GetClipboard(primary: true) : null;
@@ -178,6 +257,7 @@ sealed class Daemon : IDisposable
             }
             else if (!missing) missingMicNotified = null;
             recorder.Start(mic);
+            Log.Write($"Aufnahme startet{(command ? " (Command Mode)" : "")} · {Recorder.Tool} · Mikrofon {(mic.Length == 0 ? "Systemstandard" : mic)} · Ziel {(target.Name.Length > 0 ? target.Name : "unbekannt")}");
         }
         catch (Exception e)
         {
@@ -206,8 +286,13 @@ sealed class Daemon : IDisposable
         if (s.Sounds) Desktop.Sound("stop");
         double seconds = samples.Length / (double)AudioUtil.SampleRate;
         if (seconds < 0.3 && recorder.LastError != null) { Fail("Aufnahme fehlgeschlagen: " + recorder.LastError + " – Mikrofon prüfen: fluester mic"); return; }
-        if (seconds < 0.3) { state = State.Idle; return; }
+        if (seconds < 0.3) { state = State.Idle; Log.Write("Aufnahme verworfen (zu kurz)"); return; }
         state = State.Processing;
+        processingSince = clock.Elapsed.TotalSeconds;
+        // Großzügig: lokales Whisper braucht auf langsamen Prozessoren etwa Echtzeit, Cloud hat eigene Zeitlimits
+        processingLimit = (s.Engine == EngineChoice.Cloud ? 75 : 30 + 3 * seconds) + (s.Cleanup == CleanupChoice.Llm ? 15 : 0);
+        if (double.TryParse(Environment.GetEnvironmentVariable("FLUESTER_PROCESSING_TIMEOUT"), System.Globalization.CultureInfo.InvariantCulture, out var t)) processingLimit = t; // Tests
+        Log.Write($"Aufnahme beendet: {seconds:0.0} s · Erkennung läuft ({(s.Engine == EngineChoice.Cloud ? "Cloud" : $"Whisper {WhisperModel.ById(s.WhisperModelId).Id}, Laufzeit {WhisperLocalEngine.Backend ?? "lädt"}")})");
         bool cmd = isCommand;
         var sel = selection;
         var app = target;
@@ -240,6 +325,7 @@ sealed class Daemon : IDisposable
             return;
         }
         bool inserted = Insert(result.Text, s, app);
+        Log.Write($"Diktat fertig nach {clock.Elapsed.TotalSeconds - processingSince:0.0} s: {result.Text.Split(' ', StringSplitOptions.RemoveEmptyEntries).Length} Wörter · {(inserted ? "eingefügt" : "in der Zwischenablage")} · {result.Engine}");
         if (s.KeepHistory)
             history.Add(new HistoryItem { Raw = result.Raw, Text = result.Text, AppName = app.Name, AppId = app.Id, Seconds = seconds, IsCommand = result.IsCommand, Engine = result.Engine });
         if (result.Warning != null) Log.Write("Hinweis: " + result.Warning);
@@ -392,7 +478,7 @@ sealed class Daemon : IDisposable
                     ? $"{s.Engine.Label()} · {WhisperModel.ById(s.WhisperModelId).Name} · Laufzeit {WhisperLocalEngine.Backend ?? "noch nicht geladen"}"
                     : s.Engine.Label();
                 return $"""
-                    Flüster läuft · {(state switch { State.Recording => "hört zu", State.Processing => "verarbeitet", _ => "bereit" })}
+                    Flüster läuft · {(state switch { State.Recording => "hört zu", State.Processing => $"erkennt seit {clock.Elapsed.TotalSeconds - processingSince:0} s", _ => "bereit" })} · PID {Environment.ProcessId}
                       Taste:     {s.Hotkey.Label(linux: true)}
                       Mikrofon:  {Recorder.Describe(s.MicrophoneId)}
                       Erkennung: {engine}

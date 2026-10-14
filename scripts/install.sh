@@ -152,7 +152,10 @@ install_linux() {
   esac
 
   if [ "$UPDATE" = 1 ]; then
-    [ "$RUNNING" = 1 ] && { "$APPDIR/fluester" start || true; }
+    # Autostart-Eintrag auf den aktuellen Stand bringen und Flüster starten, wenn es lief oder automatisch starten soll
+    local AUTOSTART="${XDG_CONFIG_HOME:-$HOME/.config}/autostart/fluester.desktop"
+    [ -f "$AUTOSTART" ] && { "$APPDIR/fluester" autostart on >/dev/null 2>&1 || true; }
+    if [ "$RUNNING" = 1 ] || [ -f "$AUTOSTART" ]; then "$APPDIR/fluester" start || true; fi
     echo
     echo "${dim}Anleitung und Hilfe: https://github.com/$REPO/blob/main/docs/linux.md${reset}"
     return

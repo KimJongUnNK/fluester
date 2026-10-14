@@ -17,7 +17,8 @@ static class Program
         {
             return cmd switch
             {
-                "run" => RunDaemon(),
+                "run" => RunDaemon(rest.Contains("--background")),
+                "e2e-keys" => SelfTest.PressHotkey(rest),
                 "setup" => Setup.Run(rest),
                 "start" => Cli.Start(),
                 "status" or "toggle" or "cancel" or "paste-last" or "stop" => Cli.Remote(cmd),
@@ -40,8 +41,12 @@ static class Program
         }
     }
 
-    static int RunDaemon()
+    static int RunDaemon(bool background)
     {
+        // Im Hintergrund hängt niemand mehr an der Ausgabe – Meldungen stehen im Protokoll (fluester.log)
+        if (background) { Console.SetOut(TextWriter.Null); Console.SetError(TextWriter.Null); }
+        AppDomain.CurrentDomain.UnhandledException += (_, e) => Log.Write("ABSTURZ: " + e.ExceptionObject);
+        TaskScheduler.UnobservedTaskException += (_, e) => { Log.Write("Unbeobachteter Fehler: " + e.Exception); e.SetObserved(); };
         using var d = new Daemon();
         return d.Run();
     }
@@ -82,24 +87,51 @@ static class Cli
 
     public static int Version() { Console.WriteLine("Flüster " + Ver); return 0; }
 
+    /// <summary>Umgebung, die der Dienst braucht – eine systemd-Einheit erbt sie sonst nicht.</summary>
+    static readonly string[] PassEnv =
+    {
+        "WAYLAND_DISPLAY", "DISPLAY", "XAUTHORITY", "XDG_RUNTIME_DIR", "XDG_SESSION_TYPE", "XDG_CURRENT_DESKTOP", "XDG_SESSION_DESKTOP",
+        "DBUS_SESSION_BUS_ADDRESS", "HYPRLAND_INSTANCE_SIGNATURE", "SWAYSOCK", "PATH", "LANG", "LC_ALL", "HOME",
+        "XDG_CONFIG_HOME", "XDG_DATA_HOME", "PULSE_SERVER", "FLUESTER_HOME", "FLUESTER_RECORDER",
+    };
+
+    public const string Unit = "fluester";
+
+    /// <summary>Startet den Dienst losgelöst vom Terminal: als eigene systemd-Einheit (Schließen des Terminals beendet ihn nicht,
+    /// nach einem Absturz startet er neu), sonst in eigener Sitzung (setsid).</summary>
     public static void StartDetached()
     {
-        // Gruppe „input“ frisch eingetragen, aber erst nach dem Neuanmelden aktiv: über „sg input“ sofort mit Tastaturzugriff starten
-        bool viaSg = InputAccess.PendingRelogin;
-        var psi = new ProcessStartInfo(viaSg ? Desktop.Which("sg")! : Environment.ProcessPath!)
-            { UseShellExecute = false, RedirectStandardOutput = true, RedirectStandardError = true, RedirectStandardInput = true };
-        if (viaSg)
+        var self = Environment.ProcessPath!;
+        var cmd = new List<string>();
+        // Gruppe „input“ frisch eingetragen, aber erst nach dem Neuanmelden aktiv: über „sg input“ sofort mit Tastaturzugriff
+        if (InputAccess.PendingRelogin)
         {
-            psi.ArgumentList.Add("input");
-            psi.ArgumentList.Add("-c");
-            psi.ArgumentList.Add($"exec '{Environment.ProcessPath!.Replace("'", "'\\''")}' run --background");
+            cmd.AddRange(new[] { Desktop.Which("sg")!, "input", "-c", $"exec '{self.Replace("'", "'\\''")}' run --background" });
             Log.Write("Start über „sg input“ (Gruppe eingetragen, Anmeldung noch alt)");
         }
-        else
+        else cmd.AddRange(new[] { self, "run", "--background" });
+
+        if (Desktop.Which("systemd-run") is { } sr && Desktop.Which("systemctl") is { } sc
+            && Desktop.Run(sc, new[] { "--user", "show-environment" }, timeoutMs: 3000).Code == 0)
         {
-            psi.ArgumentList.Add("run");
-            psi.ArgumentList.Add("--background");
+            // Reste einer alten Einheit wegräumen (z. B. nach Absturz)
+            Desktop.Run(sc, new[] { "--user", "stop", Unit + ".service" }, timeoutMs: 5000);
+            Desktop.Run(sc, new[] { "--user", "reset-failed", Unit + ".service" }, timeoutMs: 3000);
+            var args = new List<string> { "--user", "--unit=" + Unit, "--description=Flüster – Diktieren in jeder App", "--collect", "--quiet",
+                "--property=Restart=on-failure", "--property=RestartSec=2" };
+            foreach (var v in PassEnv)
+                if (Environment.GetEnvironmentVariable(v) is { Length: > 0 } val) args.Add($"--setenv={v}={val}");
+            args.Add("--");
+            args.AddRange(cmd);
+            var r = Desktop.Run(sr, args, timeoutMs: 10000);
+            if (r.Code == 0) { Log.Write("Gestartet als systemd-Einheit " + Unit); return; }
+            Log.Write("systemd-run ging nicht, starte direkt: " + (r.Err + r.Out).Trim());
         }
+
+        var setsid = Desktop.Which("setsid");
+        var psi = new ProcessStartInfo(setsid ?? cmd[0])
+            { UseShellExecute = false, RedirectStandardOutput = true, RedirectStandardError = true, RedirectStandardInput = true };
+        foreach (var a in setsid != null ? cmd : cmd.Skip(1)) psi.ArgumentList.Add(a);
         Process.Start(psi);
     }
 

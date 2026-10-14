@@ -2,6 +2,18 @@
 
 Alle wichtigen Änderungen an Flüster. Versionen folgen [Semantic Versioning](https://semver.org/lang/de/).
 
+## [1.1.2] – 2026-10-14
+
+Linux: Flüster bleibt zuverlässig an, auch nach dem ersten Diktat.
+
+- **Unabhängig vom Terminal:** `fluester start` startet den Dienst als eigene systemd-Einheit `fluester`. Ohne systemd läuft er in eigener Sitzung. Schließt du das Terminal, läuft er weiter, und nach einem Absturz startet er nach 2 Sekunden neu. Den Autostart erledigt jetzt auch `fluester start`.
+- **Hängende Erkennung:** Kommt die Erkennung nicht zurück (z. B. Grafikkarten-Treiber über Vulkan), startet Flüster nach einer Zeitgrenze neu und rechnet ab dann mit dem Prozessor. Vorher blieb Flüster für immer auf „verarbeitet“, und jede weitere Taste wurde ignoriert.
+- **Wächter:** Hängt der Dienst an einem Werkzeug, das nicht antwortet, startet er nach 25 Sekunden neu. Externe Werkzeuge können ihn nicht mehr endlos blockieren.
+- **Rückmeldung:** Wer während der Erkennung erneut drückt, bekommt „Moment …“ statt Stille. `fluester status` zeigt, seit wann erkannt wird.
+- **Protokoll:** Jeder Schritt steht mit Dauer in `fluester.log`: Aufnahme, Erkennung, Einfügen, Abstürze und Signale. Der diktierte Text steht dort nie.
+- **Hintergrundbetrieb:** SIGHUP wird ignoriert, Ausgaben gehen nicht mehr ins Leere.
+- **CI:** neuer Ende-zu-Ende-Test mit echter Taste (evdev), Einfügen über uinput, echtem Mikrofon-Audio und Whisper. Er macht mehrere Diktate hintereinander, Start über `fluester start` wie bei Nutzern, und prüft, dass der Dienst das Ende der startenden Shell überlebt.
+
 ## [1.1.1] – 2026-10-14
 
 Linux: Mikrofon wählen, Tastaturzugriff ohne Neuanmelden.

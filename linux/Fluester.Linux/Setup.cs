@@ -292,7 +292,7 @@ static class Setup
             Type=Application
             Name=Flüster
             Comment=Diktieren in jeder App
-            Exec={Environment.ProcessPath} run --background
+            Exec={Environment.ProcessPath} start
             Icon=audio-input-microphone
             Terminal=false
             X-GNOME-Autostart-enabled=true

@@ -138,6 +138,45 @@ jobs:
           $f stop
           echo "::endgroup::"
 
+      - name: Ende-zu-Ende – mehrere Diktate hintereinander (echte Taste, Mikrofon, Whisper, Einfügen)
+        timeout-minutes: 10
+        run: |
+          export XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR:-$RUNNER_TEMP/xdg}"
+          export FLUESTER_HOME="$RUNNER_TEMP/e2e-home"
+          f="$PWD/dist/linux-x64/fluester"
+          mkdir -p "$FLUESTER_HOME/models"
+          cp "$RUNNER_TEMP/fhome/models/ggml-base.bin" "$FLUESTER_HOME/models/"
+          # Sprache als Mikrofon: jfk.wav läuft in Schleife in einen virtuellen Lautsprecher, dessen Monitor ist das Mikrofon
+          pactl load-module module-null-sink sink_name=sprecher
+          pactl set-default-sink lautsprecher
+          (while true; do paplay --device=sprecher "$RUNNER_TEMP/jfk.wav"; done) &
+          # X11 für Zwischenablage und aktives Fenster; die virtuelle Tastatur des Dienstes braucht /dev/uinput
+          Xvfb :77 -screen 0 1280x800x24 &
+          export DISPLAY=:77
+          sudo chmod 666 /dev/uinput
+          printf '%s' '{ "whisperModelId": "base", "language": "en-US", "cleanup": "rules", "microphoneId": "sprecher.monitor", "onboardingDone": true }' > "$FLUESTER_HOME/settings.json"
+          sleep 1
+
+          # Start wie bei Nutzern: fluester start (hier mit frisch eingetragener Gruppe input → über sg), aus einer Shell, die danach endet
+          bash -c "$f start"
+          sleep 3
+          $f status
+          # Eigene Test-Tastatur (wie echte Hardware) hält Strg rechts dreimal je 3 s
+          "$f" e2e-keys 3 3 12
+          $f status | tee status.txt
+          count=$(python3 -c "import json,os; h=json.load(open(os.environ['FLUESTER_HOME']+'/history.json')); print(len(h if isinstance(h,list) else h.get('items',[])))")
+          echo "Diktate im Verlauf: $count"
+          grep -E "Aufnahme|Diktat|Erkennung|Fehler|hängt|Wächter|ABSTURZ|SIG" "$FLUESTER_HOME/fluester.log" || true
+          test "$count" -eq 3
+          grep -q "Flüster läuft · bereit" status.txt
+
+          # Zweite Runde in einem neuen Schritt-Shell-Prozess: Dienst muss weiterlaufen (Terminal zu ≠ Flüster aus)
+          "$f" e2e-keys 1 3 12
+          count=$(python3 -c "import json,os; h=json.load(open(os.environ['FLUESTER_HOME']+'/history.json')); print(len(h if isinstance(h,list) else h.get('items',[])))")
+          echo "Diktate im Verlauf: $count"
+          test "$count" -eq 4
+          $f stop
+
       - name: Installer testen
         run: |
           FLUESTER_TARBALL=dist/Fluester-Linux-x64.tar.gz FLUESTER_NO_SETUP=1 bash scripts/install.sh

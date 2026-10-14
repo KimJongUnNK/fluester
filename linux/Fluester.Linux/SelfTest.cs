@@ -99,6 +99,29 @@ static class SelfTest
         Check(other, "andere Taste beim Halten erkannt (→ kein Diktat)", required);
     }
 
+    /// <summary><c>fluester e2e-keys [anzahl] [halten s] [pause s]</c> – für Ende-zu-Ende-Tests: legt eine eigene Test-Tastatur an
+    /// (mit Tastenwiederholung, wie echte Hardware – der laufende Dienst liest sie) und hält Strg rechts mehrmals.</summary>
+    public static int PressHotkey(string[] args)
+    {
+        var inv = System.Globalization.CultureInfo.InvariantCulture;
+        int count = args.Length > 0 ? int.Parse(args[0], inv) : 3;
+        double hold = args.Length > 1 ? double.Parse(args[1], inv) : 3;
+        double pause = args.Length > 2 ? double.Parse(args[2], inv) : 10;
+        using var kb = new VirtualKeyboard("Fluester E2E Test Keyboard", repeat: true);
+        if (kb.Open() is { } err) { Console.Error.WriteLine("✗ " + err); return 1; }
+        Console.WriteLine("Test-Tastatur angelegt – warte, bis der Dienst sie erkennt …");
+        Thread.Sleep(6500); // der Dienst sucht alle 5 s nach neuen Tastaturen
+        for (int i = 1; i <= count; i++)
+        {
+            Console.WriteLine($"Diktat {i}: Strg rechts {hold:0.#} s halten");
+            kb.Press(Keys.RIGHTCTRL, true);
+            Thread.Sleep((int)(hold * 1000));
+            kb.Press(Keys.RIGHTCTRL, false);
+            Thread.Sleep((int)(pause * 1000));
+        }
+        return 0;
+    }
+
     static void Clipboard(bool required)
     {
         Log("Zwischenablage:");
