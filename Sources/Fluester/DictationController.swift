@@ -165,6 +165,7 @@ final class DictationController {
                 _ = gestures.press(at: 0, command: false)
                 _ = gestures.release(at: 0.05)
                 _ = gestures.press(at: 0.1, command: false) // → freihändig
+                _ = gestures.release(at: 0.15)
                 bar.set(.listening(handsFree: true, command: false))
             }
         case .recording:

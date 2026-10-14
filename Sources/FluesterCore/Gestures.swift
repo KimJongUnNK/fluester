@@ -23,6 +23,8 @@ public final class HotkeyGestures {
     private var pressTime: TimeInterval = 0
     private var lastTapTime: TimeInterval = -10
     private var otherKeyWhileHeld = false
+    /// Das Loslassen des zweiten Tipps (Doppeltipp) beendet nicht gleich wieder
+    private var ignoreNextRelease = false
 
     public init() {}
 
@@ -36,6 +38,7 @@ public final class HotkeyGestures {
         case .waitingSecondTap:
             if t - lastTapTime <= doubleTapWindow && doubleTapEnabled {
                 state = .handsFree
+                ignoreNextRelease = true
                 return .switchToHandsFree
             }
             state = .holding
@@ -72,6 +75,10 @@ public final class HotkeyGestures {
             state = .idle
             return .stopAndProcess
         case .handsFree:
+            if ignoreNextRelease {
+                ignoreNextRelease = false
+                return .none
+            }
             state = .idle
             return .stopAndProcess
         case .waitingSecondTap, .idle:
@@ -96,5 +103,6 @@ public final class HotkeyGestures {
     public func reset() {
         state = .idle
         otherKeyWhileHeld = false
+        ignoreNextRelease = false
     }
 }

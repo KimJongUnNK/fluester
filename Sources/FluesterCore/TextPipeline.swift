@@ -330,7 +330,7 @@ public enum TextPipeline {
     // MARK: Leerzeichen, Großschreibung, Satzende
 
     public static func collapseSpaces(_ s: String) -> String {
-        regexReplace(s, "[ \\t\\u{00A0}]{2,}", " ")
+        regexReplace(s, "[ \\t\\x{00A0}]{2,}", " ")
     }
 
     public static func fixSpacing(_ s: String) -> String {
