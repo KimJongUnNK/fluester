@@ -1,0 +1,109 @@
+name: Release
+
+# Neue Version veröffentlichen:
+#   1. CHANGELOG.md um einen Abschnitt "## [1.2.3]" ergänzen
+#   2. git tag v1.2.3 && git push origin v1.2.3
+# Der Workflow testet, baut, prüft die App mit echter Spracherkennung und hängt die ZIP an das Release.
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    name: Bauen und veröffentlichen
+    runs-on: macos-26
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Version aus dem Tag
+        id: v
+        run: echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+
+      - name: Tests (FluesterCore)
+        run: swift test
+
+      - name: App bauen
+        run: VERSION="${{ steps.v.outputs.version }}" BUILD="${{ github.run_number }}" ./scripts/build-app.sh
+
+      - name: Bundle prüfen
+        run: |
+          plutil -lint "build/Flüster.app/Contents/Info.plist"
+          /usr/libexec/PlistBuddy -c "Print CFBundleShortVersionString" "build/Flüster.app/Contents/Info.plist"
+          codesign --verify --verbose=1 "build/Flüster.app"
+
+      - name: whisper.cpp für den Selbsttest
+        run: |
+          brew install whisper-cpp
+          MODELS="$HOME/Library/Application Support/Fluester/models"
+          mkdir -p "$MODELS"
+          curl -sSL --retry 3 -o "$MODELS/ggml-base.bin" https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-base.bin
+
+      - name: Selbsttest
+        timeout-minutes: 15
+        run: FLUESTER_SELFTEST_WHISPER=base "build/Flüster.app/Contents/MacOS/Fluester" --selftest
+
+      - name: Installer testen (installieren, starten, läuft?)
+        run: |
+          FLUESTER_ZIP=build/Fluester-macOS.zip bash scripts/install.sh
+          test -x "/Applications/Flüster.app/Contents/MacOS/Fluester"
+          sleep 6
+          pgrep -x Fluester >/dev/null && echo "✓ Flüster läuft nach dem Start" || { echo "✗ Flüster läuft nicht"; exit 1; }
+          pkill -x Fluester || true
+          bash scripts/install.sh --uninstall
+          test ! -e "/Applications/Flüster.app"
+
+      - name: Prüfsumme und Release-Text
+        env:
+          VERSION: ${{ steps.v.outputs.version }}
+        run: |
+          cd build
+          shasum -a 256 Fluester-macOS.zip > Fluester-macOS.zip.sha256
+          cd ..
+          # Abschnitt dieser Version aus dem CHANGELOG
+          awk -v v="$VERSION" '
+            $0 ~ "^## \\[" v "\\]" { on = 1; next }
+            on && /^## \[/ { exit }
+            on { print }
+          ' CHANGELOG.md > build/changes.md
+          {
+            echo "## Installieren"
+            echo
+            echo "Terminal öffnen (⌘ + Leertaste → „Terminal“) und einfügen:"
+            echo
+            echo '```bash'
+            echo "curl -fsSL https://raw.githubusercontent.com/${GITHUB_REPOSITORY}/main/scripts/install.sh | bash"
+            echo '```'
+            echo
+            echo "Oder **Fluester-macOS.zip** unten herunterladen. Schritt für Schritt: [Anleitung](https://github.com/${GITHUB_REPOSITORY}#installation)."
+            echo
+            echo "Braucht einen Mac mit Apple-Chip (M1 oder neuer) und macOS 14 oder neuer."
+            echo
+            if [ -s build/changes.md ]; then
+              echo "## Neu in $VERSION"
+              cat build/changes.md
+            fi
+          } > build/notes.md
+          cat build/notes.md
+
+      - name: Release veröffentlichen
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ steps.v.outputs.version }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" \
+            build/Fluester-macOS.zip build/Fluester-macOS.zip.sha256 \
+            --title "Flüster $VERSION" \
+            --notes-file build/notes.md
+
+      - name: Download aus dem Release prüfen (wie bei Nutzern)
+        env:
+          FLUESTER_REPO: ${{ github.repository }}
+        run: |
+          sleep 10
+          bash scripts/install.sh
+          /usr/libexec/PlistBuddy -c "Print CFBundleShortVersionString" "/Applications/Flüster.app/Contents/Info.plist"
+          pkill -x Fluester || true

@@ -1,0 +1,69 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Testen, bauen, Selbsttest
+    runs-on: macos-26
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Werkzeuge
+        run: |
+          sw_vers
+          xcodebuild -version
+          swift --version
+
+      - name: Tests (FluesterCore)
+        run: swift test
+
+      - name: App bauen
+        run: VERSION="0.0.${{ github.run_number }}" BUILD="${{ github.run_number }}" ./scripts/build-app.sh
+
+      - name: Bundle prüfen
+        run: |
+          plutil -lint "build/Flüster.app/Contents/Info.plist"
+          file "build/Flüster.app/Contents/MacOS/Fluester"
+          codesign --verify --verbose=1 "build/Flüster.app"
+
+      - name: whisper.cpp für den Selbsttest
+        run: |
+          brew install whisper-cpp
+          MODELS="$HOME/Library/Application Support/Fluester/models"
+          mkdir -p "$MODELS"
+          curl -sSL --retry 3 -o "$MODELS/ggml-base.bin" https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-base.bin
+
+      - name: Selbsttest (echte Spracherkennung mit say + Whisper + Apple)
+        timeout-minutes: 15
+        run: |
+          FLUESTER_SELFTEST_WHISPER=base "build/Flüster.app/Contents/MacOS/Fluester" --selftest || {
+            echo "--- whisper-server.log ---"
+            cat "$HOME/Library/Application Support/Fluester/whisper-server.log" || true
+            exit 1
+          }
+
+      - name: Installer testen (installieren, starten, läuft?)
+        run: |
+          FLUESTER_ZIP=build/Fluester-macOS.zip bash scripts/install.sh
+          test -x "/Applications/Flüster.app/Contents/MacOS/Fluester"
+          sleep 6
+          pgrep -x Fluester >/dev/null && echo "✓ Flüster läuft nach dem Start" || { echo "✗ Flüster läuft nicht"; exit 1; }
+          pkill -x Fluester || true
+          bash scripts/install.sh --uninstall
+          test ! -e "/Applications/Flüster.app"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Fluester-macOS
+          path: build/Fluester-macOS.zip
+          if-no-files-found: error
+          retention-days: 14

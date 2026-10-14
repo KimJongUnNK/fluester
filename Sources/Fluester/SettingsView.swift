@@ -742,6 +742,11 @@ struct AboutPane: View {
                 .foregroundStyle(.secondary)
             Text("Diktieren in jeder App: halten, sprechen, loslassen.\nKostenlos – Erkennung und KI wahlweise komplett auf deinem Mac.")
                 .multilineTextAlignment(.center)
+            HStack(spacing: 16) {
+                Link("Auf GitHub", destination: URL(string: "https://github.com/KimJongUnNK/fluester")!)
+                Link("Neueste Version", destination: URL(string: "https://github.com/KimJongUnNK/fluester/releases/latest")!)
+                Link("Hilfe", destination: URL(string: "https://github.com/KimJongUnNK/fluester#h%C3%A4ufige-probleme")!)
+            }
             Divider().frame(width: 260)
             Text("Spracherkennung: Apple Speech, whisper.cpp (MIT) oder OpenAI-kompatible APIs.\nBereinigung: Apple Intelligence, OpenAI-kompatible APIs oder Regeln.\nKein Code von Wispr Flow – eigener Nachbau.")
                 .font(.caption).foregroundStyle(.secondary).multilineTextAlignment(.center)
