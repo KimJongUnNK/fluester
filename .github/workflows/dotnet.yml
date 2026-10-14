@@ -107,6 +107,37 @@ jobs:
           $f stop
           echo "::endgroup::"
 
+      - name: Tastatur-Zugriff (Gruppe input, ohne Neuanmelden)
+        run: |
+          export XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR:-$RUNNER_TEMP/xdg}"
+          export FLUESTER_HOME="$RUNNER_TEMP/input-home"
+          f=dist/linux-x64/fluester
+          ls -l /dev/input/ | head -20
+          for i in $(seq 30); do $f status > /dev/null || break; sleep 0.3; done
+
+          echo "::group::Nicht in der Gruppe → klare Meldung"
+          $f start
+          sleep 2
+          $f status | tee before.txt
+          grep -q "nicht in der Gruppe „input“" before.txt
+          $f stop
+          echo "::endgroup::"
+
+          echo "::group::Eingetragen, Anmeldung noch alt → fluester start nimmt sg input"
+          sudo usermod -aG input "$(id -un)"
+          $f selftest 2>&1 | grep "Gruppe „input“" | tee group.txt
+          grep -q "eingetragen" group.txt
+          for i in $(seq 30); do $f status > /dev/null || break; sleep 0.3; done
+          $f start
+          sleep 2
+          $f status | tee after.txt
+          pid=$(pgrep -u "$(id -un)" -f "fluester run" | head -1)
+          grep Groups "/proc/$pid/status"
+          grep -qw "$(getent group input | cut -d: -f3)" <(grep Groups "/proc/$pid/status")
+          if grep -Eq "Kein Zugriff auf (die Tastatur|/dev/input)" after.txt; then echo "Tastatur trotz sg nicht lesbar"; exit 1; fi
+          $f stop
+          echo "::endgroup::"
+
       - name: Installer testen
         run: |
           FLUESTER_TARBALL=dist/Fluester-Linux-x64.tar.gz FLUESTER_NO_SETUP=1 bash scripts/install.sh

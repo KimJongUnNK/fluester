@@ -71,10 +71,17 @@ static class Setup
         return ok;
     }
 
-    static bool InGroup(string group)
+    /// <summary>Fedora Atomic (Silverblue, Kinoite …) führt Systemgruppen in /usr/lib/group – usermod findet sie aber nur in /etc/group.</summary>
+    static void AddGroupToEtc(string group)
     {
-        var r = Desktop.Run("id", new[] { "-nG" });
-        return r.Out.Split(' ', StringSplitOptions.TrimEntries).Contains(group);
+        try
+        {
+            if (File.ReadLines("/etc/group").Any(l => l.StartsWith(group + ":"))) return;
+            if (!File.Exists("/usr/lib/group") || !File.ReadLines("/usr/lib/group").Any(l => l.StartsWith(group + ":"))) return;
+        }
+        catch { return; }
+        Info($"Gruppe „{group}“ aus /usr/lib/group nach /etc/group übernehmen (Fedora Atomic)");
+        Sudo("sh", "-c", $"grep -q '^{group}:' /etc/group || grep '^{group}:' /usr/lib/group >> /etc/group");
     }
 
     static bool CanWrite(string path)
@@ -119,30 +126,45 @@ static class Setup
 
         // 1) Rechte
         Title("1  Rechte für Taste und Einfügen");
-        bool needRelogin = false;
-        bool inInput = InGroup("input");
+        bool active = InputAccess.Active;                       // wirkt in dieser Anmeldung
+        bool registered = active || InputAccess.Registered;     // eingetragen, wirkt spätestens nach dem Neuanmelden
+        bool needRelogin = !active && registered;
         bool uinputOk = File.Exists("/dev/uinput") && CanWrite("/dev/uinput");
         bool canRead = KeyboardWatcher.Keyboards().Any(k => { try { using var f = File.OpenRead(k.Path); return true; } catch { return false; } });
-        if (inInput && uinputOk && canRead) Good("Gruppe „input“ und /dev/uinput passen");
+        // Regel schon da und nur die Gruppe noch nicht aktiv → /dev/uinput passt nach dem Neuanmelden von selbst
+        bool fixUinput = !uinputOk && !(File.Exists(UdevRule) && registered && !active);
+        if (active && uinputOk && canRead) Good("Gruppe „input“ und /dev/uinput passen");
         else
         {
-            if (!inInput) Bad("Du bist nicht in der Gruppe „input“ (nötig, um die Diktat-Taste zu lesen)");
-            if (!uinputOk) Bad("/dev/uinput nicht beschreibbar (nötig für Strg+V über eine virtuelle Tastatur)");
-            Info("Einrichten mit sudo:");
-            Info("  usermod -aG input $USER");
-            Info($"  udev-Regel {UdevRule}: KERNEL==\"uinput\", GROUP=\"input\", MODE=\"0660\"");
-            if (Ask("Jetzt einrichten?"))
+            if (!registered) Bad("Du bist nicht in der Gruppe „input“ (nötig, um die Diktat-Taste zu lesen)");
+            else if (!active) Info("Gruppe „input“ ist eingetragen, aktiv ab dem nächsten Anmelden. Bis dahin startet Flüster über „sg input“ mit Tastaturzugriff.");
+            else if (!canRead && KeyboardWatcher.Keyboards().Count > 0) Bad("Tastatur trotz Gruppe „input“ nicht lesbar – Rechte prüfen: ls -l /dev/input/event*");
+            if (fixUinput) Bad("/dev/uinput nicht beschreibbar (nötig für Strg+V über eine virtuelle Tastatur)");
+            if (!registered || fixUinput)
             {
-                var user = Environment.UserName;
-                bool ok = true;
-                if (!inInput) { ok &= Sudo("usermod", "-aG", "input", user); needRelogin = true; }
-                ok &= SudoWrite(UdevRule, "# Flüster: virtuelle Tastatur für Strg+V\nKERNEL==\"uinput\", SUBSYSTEM==\"misc\", GROUP=\"input\", MODE=\"0660\", OPTIONS+=\"static_node=uinput\"\n");
-                ok &= SudoWrite(ModulesConf, "uinput\n");
-                Sudo("modprobe", "uinput");
-                Sudo("udevadm", "control", "--reload-rules");
-                Sudo("udevadm", "trigger", "--name-match=uinput");
-                if (ok) Good("Eingerichtet" + (needRelogin ? " – nach dem Setup einmal ab- und wieder anmelden" : ""));
-                else Bad("Nicht alles hat geklappt – siehe Meldungen oben");
+                Info("Einrichten mit sudo:");
+                if (!registered) Info("  usermod -aG input $USER");
+                if (fixUinput) Info($"  udev-Regel {UdevRule}: KERNEL==\"uinput\", GROUP=\"input\", MODE=\"0660\"");
+                if (Ask("Jetzt einrichten?"))
+                {
+                    bool ok = true;
+                    if (!registered)
+                    {
+                        AddGroupToEtc("input");
+                        ok &= Sudo("usermod", "-aG", "input", Environment.UserName);
+                        needRelogin = true;
+                    }
+                    if (fixUinput)
+                    {
+                        ok &= SudoWrite(UdevRule, "# Flüster: virtuelle Tastatur für Strg+V\nKERNEL==\"uinput\", SUBSYSTEM==\"misc\", GROUP=\"input\", MODE=\"0660\", OPTIONS+=\"static_node=uinput\"\n");
+                        ok &= SudoWrite(ModulesConf, "uinput\n");
+                        Sudo("modprobe", "uinput");
+                        Sudo("udevadm", "control", "--reload-rules");
+                        Sudo("udevadm", "trigger", "--name-match=uinput");
+                    }
+                    if (ok) Good("Eingerichtet" + (needRelogin ? " – nach dem Setup einmal ab- und wieder anmelden" : ""));
+                    else Bad("Nicht alles hat geklappt – siehe Meldungen oben");
+                }
             }
         }
 
@@ -231,7 +253,18 @@ static class Setup
         Info("Befehle: fluester status · fluester mic · fluester toggle · fluester config · fluester help");
         if (needRelogin)
         {
-            Bad("Wichtig: einmal ab- und wieder anmelden (Gruppe „input“ wird erst dann aktiv). Flüster startet danach von selbst.");
+            Bad("Wichtig: einmal ab- und wieder anmelden (Gruppe „input“ wird erst dann überall aktiv). Flüster startet danach von selbst.");
+            if (InputAccess.PendingRelogin && Ask("Flüster bis dahin schon starten (über „sg input“, mit Tastaturzugriff)?"))
+            {
+                if (Daemon.IsRunning())
+                {
+                    Daemon.Send("stop");
+                    for (int i = 0; i < 20 && Daemon.IsRunning(); i++) Thread.Sleep(150);
+                }
+                Cli.StartDetached();
+                for (int i = 0; i < 20 && !Daemon.IsRunning(); i++) Thread.Sleep(150);
+                Info(Daemon.Send("status") ?? "Start fehlgeschlagen – „fluester run“ zeigt die Meldungen");
+            }
             return 0;
         }
         if (!Daemon.IsRunning() && Ask("Flüster jetzt starten?"))

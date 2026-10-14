@@ -4,7 +4,13 @@ Alle wichtigen Änderungen an Flüster. Versionen folgen [Semantic Versioning](h
 
 ## [1.1.1] – 2026-10-14
 
-Linux: Mikrofon wählen.
+Linux: Mikrofon wählen, Tastaturzugriff ohne Neuanmelden.
+
+- **„Kein Zugriff auf /dev/input/…“:**
+  - Flüster sagt jetzt genau, was fehlt: Gruppe `input` nicht eingetragen, oder eingetragen, aber noch nicht neu angemeldet.
+  - Im zweiten Fall startet `fluester start` den Dienst über `sg input` sofort mit Tastaturzugriff. Ab- und Anmelden ist dafür nicht mehr nötig.
+  - Das Setup bietet das direkt an.
+  - Auf Fedora Silverblue/Kinoite übernimmt es die Gruppe vorher aus `/usr/lib/group`, sonst scheitert `usermod` dort.
 
 - **Neuer Befehl `fluester mic`:**
   - Zeigt alle Mikrofone mit Nummer, ohne Lautsprecher-Monitore.

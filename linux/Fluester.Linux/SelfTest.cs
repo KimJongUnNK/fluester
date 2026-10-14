@@ -64,6 +64,8 @@ static class SelfTest
     static void Input(bool required)
     {
         Log("Diktat-Taste (virtuelle Tastatur → /dev/input → Taste erkannt):");
+        Log("  Gruppe „input“: " + (Libc.geteuid() == 0 ? "nicht nötig (root)" : InputAccess.Active ? "aktiv"
+            : InputAccess.Registered ? "eingetragen, aktiv nach dem nächsten Anmelden (bis dahin: fluester stop; fluester start)" : "fehlt – fluester setup"));
         using var vk = new VirtualKeyboard();
         var err = vk.Open();
         Check(err == null, err ?? "virtuelle Tastatur angelegt", required);

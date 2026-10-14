@@ -147,10 +147,12 @@ Einstellungen (`~/.config/fluester`), Verlauf und Modelle (`~/.local/share/flues
 
 Der erste Schritt ist immer **`fluester status`**. Der Befehl listet erkannte Probleme samt Lösung auf.
 
-**Die Taste reagiert nicht.**
-- Bist du in der Gruppe `input`? Prüfen kannst du das mit `id -nG`. Nach `fluester setup` musst du dich einmal ab- und wieder anmelden.
-- Läuft Flüster? Das zeigt `fluester status`, starten kannst du es mit `fluester start`.
-- Mit `fluester run` siehst du alle Meldungen live.
+**Die Taste reagiert nicht, oder „Kein Zugriff auf /dev/input/event…“.**
+Flüster liest die Tastatur nur mit der Gruppe `input`. Die wirkt erst in Programmen, die nach dem nächsten Anmelden starten.
+- **Nicht in der Gruppe:** `fluester setup` trägt dich ein. Von Hand geht es mit `sudo usermod -aG input $USER`.
+- **Fedora Silverblue/Kinoite:** Meldet `usermod` „group 'input' does not exist in /etc/group“, übernimm die Gruppe zuerst mit `grep '^input:' /usr/lib/group | sudo tee -a /etc/group`. Das Setup erledigt das selbst.
+- **Eingetragen, aber noch nicht neu angemeldet:** `fluester stop; fluester start`. Flüster startet dann über `sg input` sofort mit Tastaturzugriff. Nach dem nächsten Anmelden läuft es wieder ganz normal.
+- **Prüfen:** `fluester selftest` zeigt in der Zeile „Gruppe „input““, ob die Gruppe fehlt, eingetragen oder aktiv ist. Mit `fluester run` siehst du alle Meldungen live.
 
 **Der Text landet nur in der Zwischenablage.**
 `/dev/uinput` ist nicht beschreibbar. Führ `fluester setup` erneut aus. Danach zeigt `ls -l /dev/uinput` die Gruppe `input` mit den Rechten `crw-rw----`.

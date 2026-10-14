@@ -27,6 +27,38 @@ static class Libc
     public const int O_WRONLY = 1, O_NONBLOCK = 0x800;
 }
 
+/// <summary>Zugriff auf /dev/input hängt an der Gruppe „input“. Die wirkt aber erst in Prozessen, die nach dem nächsten
+/// Anmelden starten – bis dahin hilft „sg input“, das die frisch eingetragene Gruppe sofort mitgibt.</summary>
+static class InputAccess
+{
+    static string[] Groups(params string[] user) =>
+        Desktop.Run("id", new[] { "-nG" }.Concat(user)).Out.Split(' ', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+
+    /// <summary>Dieser Prozess hat die Gruppe – Tastatur ist lesbar.</summary>
+    public static bool Active => Libc.geteuid() == 0 || Groups().Contains("input");
+
+    /// <summary>Der Nutzer ist in /etc/group eingetragen (gilt für neue Anmeldungen).</summary>
+    public static bool Registered => Groups(Environment.UserName).Contains("input");
+
+    /// <summary>Eingetragen, aber in dieser Anmeldung noch nicht aktiv: dann mit „sg input“ starten.</summary>
+    public static bool PendingRelogin => !Active && Registered && Desktop.Which("sg") != null;
+
+    static (string Text, DateTime At)? cached;
+
+    /// <summary>Was bei „Kein Zugriff“ wirklich hilft (höchstens alle 30 s neu ermittelt).</summary>
+    public static string Hint(string path)
+    {
+        if (cached is { } c && (DateTime.UtcNow - c.At).TotalSeconds < 30) return c.Text;
+        var text = Active
+            ? $"Kein Zugriff auf {path} trotz Gruppe „input“ – Rechte prüfen: ls -l {path}"
+            : Registered
+                ? "Kein Zugriff auf die Tastatur: Gruppe „input“ ist eingetragen, wirkt aber erst nach Ab- und Anmelden. Sofort: fluester stop; fluester start"
+                : "Kein Zugriff auf die Tastatur: du bist nicht in der Gruppe „input“. Einrichten: fluester setup, danach ab- und anmelden";
+        cached = (text, DateTime.UtcNow);
+        return text;
+    }
+}
+
 /// <summary>Liest Tastendrücke direkt von den Eingabegeräten (/dev/input/event*). Funktioniert unter X11 und Wayland,
 /// braucht Mitgliedschaft in der Gruppe „input“. Neue Tastaturen (USB, Bluetooth) werden alle paar Sekunden erkannt.</summary>
 sealed class KeyboardWatcher : IDisposable
@@ -116,7 +148,7 @@ sealed class KeyboardWatcher : IDisposable
         }
         catch (UnauthorizedAccessException)
         {
-            Problem?.Invoke($"Kein Zugriff auf {d.Path} – Nutzer in die Gruppe „input“ aufnehmen (fluester setup)");
+            Problem?.Invoke(InputAccess.Hint(d.Path));
         }
         catch (IOException)
         {

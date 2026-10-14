@@ -84,9 +84,22 @@ static class Cli
 
     public static void StartDetached()
     {
-        var psi = new ProcessStartInfo(Environment.ProcessPath!) { UseShellExecute = false, RedirectStandardOutput = true, RedirectStandardError = true, RedirectStandardInput = true };
-        psi.ArgumentList.Add("run");
-        psi.ArgumentList.Add("--background");
+        // Gruppe „input“ frisch eingetragen, aber erst nach dem Neuanmelden aktiv: über „sg input“ sofort mit Tastaturzugriff starten
+        bool viaSg = InputAccess.PendingRelogin;
+        var psi = new ProcessStartInfo(viaSg ? Desktop.Which("sg")! : Environment.ProcessPath!)
+            { UseShellExecute = false, RedirectStandardOutput = true, RedirectStandardError = true, RedirectStandardInput = true };
+        if (viaSg)
+        {
+            psi.ArgumentList.Add("input");
+            psi.ArgumentList.Add("-c");
+            psi.ArgumentList.Add($"exec '{Environment.ProcessPath!.Replace("'", "'\\''")}' run --background");
+            Log.Write("Start über „sg input“ (Gruppe eingetragen, Anmeldung noch alt)");
+        }
+        else
+        {
+            psi.ArgumentList.Add("run");
+            psi.ArgumentList.Add("--background");
+        }
         Process.Start(psi);
     }
 
