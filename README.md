@@ -255,7 +255,7 @@ build/Flüster.app/Contents/MacOS/Fluester --selftest   # Selbsttest mit echter 
   - Apple Intelligence
   - Einfügen in andere Apps, Flow-Leiste, Menüleiste, Einstellungen und Einrichtung
 
-**Neue Version veröffentlichen:** `CHANGELOG.md` ergänzen, dann `git tag v1.2.3 && git push origin v1.2.3`. GitHub testet, baut und veröffentlicht das Release automatisch.
+**Neue Version veröffentlichen:** `CHANGELOG.md` ergänzen, dann auf GitHub **Actions › Release › „Run workflow“** öffnen und die Version eintragen, z. B. `1.2.3`. Alternativ `git tag v1.2.3 && git push origin v1.2.3`. GitHub testet, baut und veröffentlicht das Release automatisch.
 
 ---
 
