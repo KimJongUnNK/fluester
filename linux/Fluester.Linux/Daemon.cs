@@ -281,7 +281,7 @@ sealed class Daemon : IDisposable
     void Finish()
     {
         if (state != State.Recording) return;
-        var samples = recorder.Stop();
+        var samples = recorder.Stop(tailMs: 150);
         var s = store.Current;
         if (s.Sounds) Desktop.Sound("stop");
         double seconds = samples.Length / (double)AudioUtil.SampleRate;

@@ -334,8 +334,10 @@ sealed class Recorder : IDisposable
         mics ??= Devices();
         if (deviceId.Length == 0)
             return mics.FirstOrDefault(m => m.IsDefault) is { } d ? $"Systemstandard ({d.Name})" : "Systemstandard";
-        return mics.FirstOrDefault(m => m.Id == deviceId) is { } m ? m.Name + (m.Muted ? " (stummgeschaltet)" : "")
-            : $"{deviceId} – nicht angeschlossen, solange gilt der Systemstandard";
+        if (mics.FirstOrDefault(m => m.Id == deviceId) is { } m) return m.Name + (m.Muted ? " (stummgeschaltet)" : "");
+        // Nicht in der Liste, aber vorhanden (z. B. ein bewusst gewählter Monitor) → Namen zeigen statt „nicht angeschlossen“
+        Resolve(deviceId, out bool missing);
+        return missing ? $"{deviceId} – nicht angeschlossen, solange gilt der Systemstandard" : deviceId;
     }
 
     public void Start(string deviceId)
@@ -395,8 +397,11 @@ sealed class Recorder : IDisposable
         reader.Start();
     }
 
-    public float[] Stop()
+    /// <summary>Aufnahme beenden. <paramref name="tailMs"/>: noch kurz weiter aufnehmen, damit die letzte Silbe (die beim
+    /// Loslassen der Taste noch im Puffer steckt) nicht abgeschnitten wird.</summary>
+    public float[] Stop(int tailMs = 0)
     {
+        if (proc != null && tailMs > 0 && !proc.HasExited) Thread.Sleep(tailMs);
         if (proc != null)
         {
             bool died = proc.HasExited && proc.ExitCode != 0;

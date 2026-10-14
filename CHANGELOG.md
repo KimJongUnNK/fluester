@@ -12,6 +12,8 @@ Linux: Flüster bleibt zuverlässig an, auch nach dem ersten Diktat.
 - **Rückmeldung:** Wer während der Erkennung erneut drückt, bekommt „Moment …“ statt Stille. `fluester status` zeigt, seit wann erkannt wird.
 - **Protokoll:** Jeder Schritt steht mit Dauer in `fluester.log`: Aufnahme, Erkennung, Einfügen, Abstürze und Signale. Der diktierte Text steht dort nie.
 - **Hintergrundbetrieb:** SIGHUP wird ignoriert, Ausgaben gehen nicht mehr ins Leere.
+- **Letzte Silbe:** Nach dem Loslassen nimmt Flüster noch 150 ms weiter auf, damit das Ende nicht abgeschnitten wird.
+- **`fluester status`:** Ein bewusst gewähltes Gerät wie ein Monitor erscheint nicht mehr fälschlich als „nicht angeschlossen“.
 - **CI:** neuer Ende-zu-Ende-Test mit echter Taste (evdev), Einfügen über uinput, echtem Mikrofon-Audio und Whisper. Er macht mehrere Diktate hintereinander, Start über `fluester start` wie bei Nutzern, und prüft, dass der Dienst das Ende der startenden Shell überlebt.
 
 ## [1.1.1] – 2026-10-14
