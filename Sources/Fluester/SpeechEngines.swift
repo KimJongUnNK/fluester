@@ -35,8 +35,8 @@ final class AppleSpeechEngine: SpeechEngine {
     let name = "Apple SpeechAnalyzer"
 
     func transcribe(_ samples: [Float], sampleRate: Double, language: String, hints: [String]) async throws -> String {
-        let transcriber = try await Self.makeTranscriber(language: language)
-        try await Self.ensureAssets(transcriber)
+        let (transcriber, locale) = try await Self.makeTranscriber(language: language)
+        try await Self.ensureAssets(transcriber, locale: locale)
         let format = await SpeechAnalyzer.bestAvailableAudioFormat(compatibleWith: [transcriber])
         let buffer = try AudioBuffers.make(samples: samples, sampleRate: sampleRate, to: format)
 
@@ -64,16 +64,25 @@ final class AppleSpeechEngine: SpeechEngine {
         return try await collector.value.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
-    static func makeTranscriber(language: String) async throws -> SpeechTranscriber {
+    static func makeTranscriber(language: String) async throws -> (SpeechTranscriber, Locale) {
         let wanted = SpeechEngines.locale(for: language)
         guard let locale = await SpeechTranscriber.supportedLocale(equivalentTo: wanted) else {
             throw FluesterError("Apple-Spracherkennung kann „\(wanted.identifier)“ nicht – andere Sprache oder Whisper wählen")
         }
-        return SpeechTranscriber(locale: locale, transcriptionOptions: [], reportingOptions: [], attributeOptions: [])
+        return (SpeechTranscriber(locale: locale, transcriptionOptions: [], reportingOptions: [], attributeOptions: []), locale)
     }
 
-    /// Sprachpaket laden, falls es fehlt (einmalig, ein paar hundert MB).
-    static func ensureAssets(_ transcriber: SpeechTranscriber) async throws {
+    /// Sprachpaket reservieren und laden, falls es fehlt (einmalig, ein paar hundert MB).
+    static func ensureAssets(_ transcriber: SpeechTranscriber, locale: Locale) async throws {
+        // Ohne Reservierung verweigert der Asset-Katalog den Download ("not subscribed")
+        let reserved = await AssetInventory.reservedLocales
+        if !reserved.contains(where: { $0.identifier(.bcp47) == locale.identifier(.bcp47) }) {
+            let limit = await AssetInventory.maximumReservedLocales
+            if reserved.count >= limit, let oldest = reserved.first {
+                _ = await AssetInventory.release(reservedLocale: oldest)
+            }
+            _ = try await AssetInventory.reserve(locale: locale)
+        }
         if let request = try await AssetInventory.assetInstallationRequest(supporting: [transcriber]) {
             try await request.downloadAndInstall()
         }
@@ -81,8 +90,8 @@ final class AppleSpeechEngine: SpeechEngine {
 
     /// Für die Einstellungen: Sprachpaket vorab laden.
     static func prepare(language: String) async throws {
-        let t = try await makeTranscriber(language: language)
-        try await ensureAssets(t)
+        let (t, locale) = try await makeTranscriber(language: language)
+        try await ensureAssets(t, locale: locale)
     }
 }
 
@@ -204,6 +213,8 @@ actor WhisperServer {
     static func modelURL(_ m: WhisperModel) -> URL { AppPaths.models.appendingPathComponent(m.file) }
     static func isInstalled(_ m: WhisperModel) -> Bool { FileManager.default.fileExists(atPath: modelURL(m).path) }
 
+    static var logURL: URL { AppPaths.support.appendingPathComponent("whisper-server.log") }
+
     func ensureRunning(model: WhisperModel, language: String) async throws -> Int {
         let lang = language == "auto" ? "auto" : String(language.prefix(2))
         let wanted = model.file + "|" + lang
@@ -216,24 +227,45 @@ actor WhisperServer {
         guard FileManager.default.fileExists(atPath: modelPath) else {
             throw FluesterError("Whisper-Modell fehlt – Einstellungen › Erkennung › Modell laden")
         }
+        // Erst mit GPU (Metal), falls der Server sofort abstürzt ohne
+        for useGPU in [true, false] {
+            let p = try launch(bin: bin, modelPath: modelPath, lang: lang, gpu: useGPU)
+            process = p
+            key = wanted
+            Self.runningPID = p.processIdentifier
+            // Modell laden dauert je nach Größe ein paar Sekunden
+            for _ in 0..<240 {
+                if await isUp() { return port }
+                if !p.isRunning { break }
+                try await Task.sleep(nanoseconds: 150_000_000)
+            }
+            let crashed = !p.isRunning
+            stop()
+            if !crashed { break }   // läuft, antwortet aber nicht – ohne GPU hilft das nicht
+        }
+        throw FluesterError("whisper-server startet nicht: " + Self.logTail())
+    }
+
+    private func launch(bin: String, modelPath: String, lang: String, gpu: Bool) throws -> Process {
         let p = Process()
         p.executableURL = URL(fileURLWithPath: bin)
         let threads = max(4, min(8, ProcessInfo.processInfo.activeProcessorCount - 2))
-        p.arguments = ["-m", modelPath, "-l", lang, "--host", "127.0.0.1", "--port", String(port), "-t", String(threads), "-nt"]
-        p.standardOutput = FileHandle.nullDevice
-        p.standardError = FileHandle.nullDevice
+        var args = ["-m", modelPath, "-l", lang, "--host", "127.0.0.1", "--port", String(port), "-t", String(threads), "-nt"]
+        if !gpu { args.append("-ng") }
+        p.arguments = args
+        FileManager.default.createFile(atPath: Self.logURL.path, contents: nil)
+        let log = try? FileHandle(forWritingTo: Self.logURL)
+        p.standardOutput = log ?? FileHandle.nullDevice
+        p.standardError = log ?? FileHandle.nullDevice
         try p.run()
-        process = p
-        key = wanted
-        Self.runningPID = p.processIdentifier
-        // Modell laden dauert je nach Größe ein paar Sekunden
-        for _ in 0..<200 {
-            if await isUp() { return port }
-            if !p.isRunning { break }
-            try await Task.sleep(nanoseconds: 150_000_000)
-        }
-        stop()
-        throw FluesterError("whisper-server startet nicht (Modell beschädigt? Neu laden)")
+        return p
+    }
+
+    /// Letzte Zeilen des Server-Logs für Fehlermeldungen.
+    static func logTail(_ lines: Int = 4) -> String {
+        guard let text = try? String(contentsOf: logURL, encoding: .utf8) else { return "kein Log" }
+        let tail = text.split(separator: "\n").suffix(lines).joined(separator: " · ")
+        return tail.isEmpty ? "kein Log" : String(tail.suffix(400))
     }
 
     private func isUp() async -> Bool {
