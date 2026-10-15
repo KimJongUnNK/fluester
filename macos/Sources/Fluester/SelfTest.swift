@@ -3,7 +3,7 @@ import AVFoundation
 import FluesterCore
 
 /// `Fluester --selftest`: prüft ohne Mikrofon und ohne Klicks, ob Erkennung, Bereinigung und Oberfläche wirklich laufen.
-/// Sprache kommt von `say`. Für die CI und zur Fehlersuche auf dem eigenen Mac.
+/// Sprache kommt aus FLUESTER_SELFTEST_WAV (CI: jfk.wav) oder von `say`. Für die CI und zur Fehlersuche auf dem eigenen Mac.
 enum SelfTest {
     @MainActor
     static func start() {
@@ -50,11 +50,24 @@ enum SelfTest {
         log("Spracherkennung: \(Permissions.speechRecognitionGranted ? "erlaubt" : Permissions.speechRecognitionUndetermined ? "nicht gefragt" : "nicht erlaubt")")
         log("Apple Intelligence: \(Rewriters.appleIntelligenceProblem() ?? "verfügbar")")
 
-        // 4) Sprache erzeugen
-        let sentence = "Hello, this is a test of the dictation app."
-        guard let samples = speech(sentence) else {
-            log("✗ say konnte keine Audiodatei erzeugen")
+        // 4) Testaudio: eine echte Aufnahme (FLUESTER_SELFTEST_WAV, in der CI jfk.wav) ist verlässlich.
+        //    Ohne sie spricht `say` – das liefert auf frisch gestarteten CI-Macs gelegentlich leere Dateien.
+        let samples: [Float]
+        var expectWord = "test"
+        if let wav = env["FLUESTER_SELFTEST_WAV"], let fromFile = try? AudioBuffers.loadFile(URL(fileURLWithPath: wav)) {
+            samples = fromFile
+            expectWord = (env["FLUESTER_SELFTEST_EXPECT"] ?? "").lowercased()
+            log("Testaudio: \(URL(fileURLWithPath: wav).lastPathComponent)")
+        } else if let spoken = speech("Hello, this is a test of the dictation app.") {
+            samples = spoken
+            log("Testaudio: say")
+        } else {
+            log("✗ Kein Testaudio – say lieferte auch nach drei Versuchen keine Sprache")
             return false
+        }
+        let expect = expectWord
+        let matches: (String) -> Bool = { text in
+            expect.isEmpty ? !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty : text.lowercased().contains(expect)
         }
         log(String(format: "Audio: %.1f s, Sprache erkannt: %@", Double(samples.count) / AudioRecorder.sampleRate,
                    AudioUtil.hasSpeech(samples, sampleRate: 16000) ? "ja" : "nein"))
@@ -68,7 +81,7 @@ enum SelfTest {
                 let start = Date()
                 let text = try await withTimeout(180) { try await engine.transcribe(trimmed, sampleRate: 16000, language: "en-US", hints: ["Flüster"]) }
                 log(String(format: "Whisper (%@): „%@“ in %.1f s", id, text, Date().timeIntervalSince(start)))
-                if text.lowercased().contains("test") { log("  ✓") } else { ok = false; log("  ✗ Text passt nicht") }
+                if matches(text) { log("  ✓") } else { ok = false; log("  ✗ Text passt nicht") }
                 // Zweiter Lauf: Server läuft schon, muss schnell sein
                 let s2 = Date()
                 _ = try await engine.transcribe(trimmed, sampleRate: 16000, language: "en-US", hints: [])
@@ -95,7 +108,7 @@ enum SelfTest {
                 let start = Date()
                 let text = try await withTimeout(120) { try await AppleSpeechEngine().transcribe(trimmed, sampleRate: 16000, language: "en-US", hints: []) }
                 log(String(format: "Apple SpeechAnalyzer: „%@“ in %.1f s", text, Date().timeIntervalSince(start)))
-                if text.lowercased().contains("test") { log("  ✓") } else {
+                if matches(text) { log("  ✓") } else {
                     if appleRequired { ok = false }
                     log("  ⚠︎ Text passt nicht")
                 }
@@ -109,7 +122,7 @@ enum SelfTest {
                 let start = Date()
                 let text = try await withTimeout(120) { try await auto.transcribe(trimmed, sampleRate: 16000, language: "en-US", hints: []) }
                 log(String(format: "Apple (Standard, %@): „%@“ in %.1f s", auto.name, text, Date().timeIntervalSince(start)))
-                log(text.lowercased().contains("test") ? "  ✓" : "  ⚠︎ Text passt nicht")
+                log(matches(text) ? "  ✓" : "  ⚠︎ Text passt nicht")
             } catch {
                 log("⚠︎ Apple (Standard): \(error.localizedDescription)")
             }
@@ -136,20 +149,25 @@ enum SelfTest {
         return Array(hits.prefix(6)).map { String($0.prefix(160)) }
     }
 
-    /// Text mit `say` sprechen lassen und als 16 kHz-Samples laden.
+    /// Text mit `say` sprechen lassen und als 16 kHz-Samples laden. `say` liefert auf frisch gestarteten Macs
+    /// manchmal eine leere Datei – deshalb bis zu drei Versuche, und nur Audio mit hörbarer Sprache zählt.
     static func speech(_ text: String) -> [Float]? {
         let url = FileManager.default.temporaryDirectory.appendingPathComponent("fluester-selftest.aiff")
-        try? FileManager.default.removeItem(at: url)
-        let p = Process()
-        p.executableURL = URL(fileURLWithPath: "/usr/bin/say")
-        p.arguments = ["-o", url.path, text]
-        do {
-            try p.run()
-            p.waitUntilExit()
-        } catch {
-            return nil
+        for attempt in 1...3 {
+            try? FileManager.default.removeItem(at: url)
+            let p = Process()
+            p.executableURL = URL(fileURLWithPath: "/usr/bin/say")
+            p.arguments = ["-o", url.path, text]
+            if (try? p.run()) != nil {
+                p.waitUntilExit()
+                if p.terminationStatus == 0, let samples = try? AudioBuffers.loadFile(url),
+                   AudioUtil.hasSpeech(samples, sampleRate: 16000) {
+                    return samples
+                }
+            }
+            log("  · say lieferte keine Sprache (Versuch \(attempt) von 3)")
+            Thread.sleep(forTimeInterval: 2)
         }
-        guard p.terminationStatus == 0 else { return nil }
-        return try? AudioBuffers.loadFile(url)
+        return nil
     }
 }

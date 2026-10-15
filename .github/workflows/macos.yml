@@ -52,11 +52,14 @@ jobs:
           MODELS="$HOME/Library/Application Support/Fluester/models"
           mkdir -p "$MODELS"
           curl -sSL --retry 3 -o "$MODELS/ggml-base.bin" https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-base.bin
+          # Echte Sprachaufnahme als Testaudio – verlässlicher als `say`, das auf frischen CI-Macs manchmal leer bleibt
+          curl -sSL --retry 3 -o "$RUNNER_TEMP/jfk.wav" https://raw.githubusercontent.com/ggml-org/whisper.cpp/master/samples/jfk.wav
 
-      - name: Selbsttest (echte Spracherkennung mit say + Whisper + Apple)
+      - name: Selbsttest (echte Spracherkennung mit Whisper + Apple)
         timeout-minutes: 15
         run: |
-          FLUESTER_SELFTEST_WHISPER=base "build/Flüster.app/Contents/MacOS/Fluester" --selftest || {
+          FLUESTER_SELFTEST_WHISPER=base FLUESTER_SELFTEST_WAV="$RUNNER_TEMP/jfk.wav" FLUESTER_SELFTEST_EXPECT=country \
+            "build/Flüster.app/Contents/MacOS/Fluester" --selftest || {
             echo "--- whisper-server.log ---"
             cat "$HOME/Library/Application Support/Fluester/whisper-server.log" || true
             exit 1
