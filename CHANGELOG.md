@@ -16,6 +16,7 @@ Linux bekommt ein App-Fenster wie am Mac. Windows öffnet sein Fenster jetzt wie
   - Das Fenster steuert nur; diktiert wird weiter vom Hintergrunddienst. Schließen beendet Flüster nicht. Öffnet man es ein zweites Mal, kommt das offene Fenster nach vorn.
 - **Linux – grafische Einrichtung** in sechs Schritten: Willkommen, Berechtigungen, Mikrofon (mit Pegel), Taste, Erkennung (Modell laden), Ausprobieren. Der Installer öffnet sie nach der Erstinstallation von selbst. Ohne GTK 4/libadwaita oder ohne grafische Sitzung bleibt es beim Assistenten im Terminal.
 - **Linux – App-Menü:** Eintrag „Flüster“ mit eigenem Symbol und der Aktion „Diktat an/aus“ (Rechtsklick). Der frühere Extra-Eintrag „Flüster: Diktat an/aus“ entfällt. Neu: `fluester app`, `fluester integrate`.
+- **Linux – Terminal-Assistent:** stürzt nicht mehr ab, wenn ein Systembefehl wie `modprobe` fehlt (z. B. in Containern), sondern überspringt ihn mit Hinweis.
 - **Linux – Dienst:** liefert seinen Stand maschinenlesbar (`status-json`) für das Fenster. Ein inzwischen geladenes Modell verschwindet aus den Problemen, ohne Neustart.
 - **Modell-Spiegel:** `FLUESTER_MODEL_MIRROR` lädt Whisper-Modelle von einem Spiegel statt von Hugging Face (Firmennetz, Firewall).
 - **Windows:** Start aus dem Startmenü öffnet das Einstellungsfenster wie bei einer App, statt nur eine Sprechblase zu zeigen. Beim ersten Schließen erklärt eine Sprechblase, dass Flüster im Infobereich weiterläuft. Der Autostart bleibt still.

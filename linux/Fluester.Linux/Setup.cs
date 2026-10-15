@@ -58,9 +58,18 @@ static class Setup
     {
         var psi = new ProcessStartInfo(Libc.geteuid() == 0 ? args[0] : "sudo") { UseShellExecute = false };
         foreach (var a in Libc.geteuid() == 0 ? args.Skip(1) : args) psi.ArgumentList.Add(a);
-        using var p = Process.Start(psi)!;
-        p.WaitForExit();
-        return p.ExitCode == 0;
+        try
+        {
+            using var p = Process.Start(psi)!;
+            p.WaitForExit();
+            return p.ExitCode == 0;
+        }
+        catch (System.ComponentModel.Win32Exception)
+        {
+            // Werkzeug fehlt (z. B. modprobe in Containern, sudo auf Minimalsystemen) – weiter mit dem Rest
+            Bad($"„{psi.FileName}“ gibt es hier nicht – übersprungen");
+            return false;
+        }
     }
 
     static bool SudoWrite(string file, string content)
