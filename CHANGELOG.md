@@ -2,6 +2,21 @@
 
 Alle wichtigen Änderungen an Flüster. Versionen folgen [Semantic Versioning](https://semver.org/lang/de/).
 
+## [1.2.0] – 2026-10-15
+
+Linux: Flow-Leiste wie auf Mac und Windows.
+
+- **Flow-Leiste unten in der Bildschirmmitte:**
+  - Zeigt beim Zuhören eine Live-Wellenform und die Dauer, im Command Mode violett.
+  - Danach „Schreibt …“, dann „✓ 12 Wörter“ oder einen Fehler bzw. Hinweis.
+  - Vorher gab es unter Linux nur Töne, man sah nicht, ob Flüster zuhört, rechnet oder hängt.
+  - Technik: ein X11-Fenster ohne Fensterverwaltung, das immer oben liegt, nie den Fokus nimmt und Klicks durchlässt. Es läuft unter X11 und unter Wayland über Xwayland (GNOME, KDE, Sway, Hyprland) und ist mit cairo gezeichnet.
+  - Ohne Anzeige meldet sich Flüster über Benachrichtigungen, jetzt auch bei „hört zu“ und „fertig“.
+- **Nur kurz getippt:** Statt still abzubrechen, erklärt Flüster jetzt: „Strg rechts halten zum Sprechen · 2× tippen = freihändig“.
+- **`fluester bar`:** zeigt die Leiste zur Probe. `fluester status` zeigt, wo sie sitzt oder warum sie aus ist.
+- **Start mit Gruppe `input`:** `fluester start` nimmt `sg input`, sobald du eingetragen bist. Das hilft auch, wenn der systemd-Nutzerdienst noch mit den alten Gruppen läuft.
+- **Selbsttest und CI:** zeichnen jeden Zustand der Leiste als Bild (CI-Artefakt „Flow-Leiste-Linux“) und prüfen das echte Fenster: sichtbar, ohne Fensterverwaltung, blendet sich aus. Der Ende-zu-Ende-Test läuft mit Leiste.
+
 ## [1.1.2] – 2026-10-14
 
 Linux: Flüster bleibt zuverlässig an, auch nach dem ersten Diktat.

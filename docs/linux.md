@@ -12,7 +12,7 @@
 
 ---
 
-Du hältst **Strg rechts**, sprichst und lässt los. Der Text landet sauber formuliert dort, wo dein Cursor steht. Das klappt in jeder App unter **X11 und Wayland**, auf GNOME, KDE, Cinnamon, XFCE, Sway, Hyprland und anderen Oberflächen. Flüster läuft als schlanker Hintergrunddienst, eingerichtet wird es mit einem Assistenten im Terminal.
+Du hältst **Strg rechts**, sprichst und lässt los. Der Text landet sauber formuliert dort, wo dein Cursor steht. Das klappt in jeder App unter **X11 und Wayland**, auf GNOME, KDE, Cinnamon, XFCE, Sway, Hyprland und anderen Oberflächen. Flüster läuft als schlanker Hintergrunddienst mit **Flow-Leiste** unten in der Bildschirmmitte, wie auf Mac und Windows. Eingerichtet wird es mit einem Assistenten im Terminal.
 
 **So funktioniert es:**
 - **Diktat-Taste:** direkt über die Eingabegeräte des Kernels (`/dev/input`). Damit klappt sie unabhängig vom Desktop.
@@ -56,7 +56,18 @@ Installiert wird nur für deinen Nutzer, nach `~/.local/share/fluester/app`. Der
 | Korrigieren | „um 3, ich meine um 4“ → „um 4“ · „streich das“ |
 | Liste | „erstens Milch, zweitens Brot, drittens Eier“ |
 
-Ein leiser Ton markiert Start und Ende der Aufnahme. Fehler und Hinweise erscheinen als Desktop-Benachrichtigung.
+### Flow-Leiste
+
+Während du diktierst, zeigt unten in der Bildschirmmitte eine schwarze Leiste, was gerade passiert:
+
+| Leiste | Bedeutung |
+| --- | --- |
+| ● ▮▮▮▮▮ 0:03 | hört zu, Wellenform live (violett im Command Mode) |
+| ••• Schreibt … | erkennt und bereinigt |
+| ✓ 12 Wörter | eingefügt |
+| ! Hinweis | z. B. „Strg rechts halten zum Sprechen“ nach zu kurzem Tippen, „Nichts verstanden“ oder ein Fehler |
+
+Die Leiste nimmt nie den Fokus, der Text landet also immer im richtigen Fenster, und Klicks gehen durch sie hindurch. Sie läuft unter X11 und unter Wayland über Xwayland (GNOME, KDE, Sway, Hyprland). Zur Probe zeigt `fluester bar` sie 7 Sekunden lang. Gibt es keine X11-/Xwayland-Anzeige, meldet sich Flüster stattdessen über Benachrichtigungen. Ein leiser Ton markiert zusätzlich Start und Ende der Aufnahme.
 
 ### Mikrofon wählen
 
@@ -91,6 +102,7 @@ Pegel von Yeti Stereo Microphone Analog Stereo – sprich ein paar Worte …
 fluester setup              Einrichtung erneut starten
 fluester mic                Mikrofon wählen und Pegel testen
 fluester mic list | test | <nummer>
+fluester bar                Flow-Leiste zur Probe zeigen
 fluester status             läuft er? Taste, Mikrofon, Erkennung, Probleme
 fluester start | stop       Dienst starten / beenden (läuft unabhängig vom Terminal weiter)
 fluester run                im Vordergrund laufen lassen (zeigt alle Meldungen, endet mit dem Terminal)
@@ -162,6 +174,14 @@ Flüster liest die Tastatur nur mit der Gruppe `input`. Die wirkt erst in Progra
 - **Fedora Silverblue/Kinoite:** Meldet `usermod` „group 'input' does not exist in /etc/group“, übernimm die Gruppe zuerst mit `grep '^input:' /usr/lib/group | sudo tee -a /etc/group`. Das Setup erledigt das selbst.
 - **Eingetragen, aber noch nicht neu angemeldet:** `fluester stop; fluester start`. Flüster startet dann über `sg input` sofort mit Tastaturzugriff. Nach dem nächsten Anmelden läuft es wieder ganz normal.
 - **Prüfen:** `fluester selftest` zeigt in der Zeile „Gruppe „input““, ob die Gruppe fehlt, eingetragen oder aktiv ist. Mit `fluester run` siehst du alle Meldungen live.
+
+**Keine Leiste zu sehen.**
+- `fluester bar` zeigt sie zur Probe. Erscheint sie dort, aber nicht beim Diktieren, starte Flüster neu: `fluester stop; fluester start`.
+- `fluester status` zeigt in der Zeile „Leiste“, wo sie sitzt oder warum sie aus ist, etwa wenn es keine X11-/Xwayland-Anzeige gibt. Dann kommt die Rückmeldung über Benachrichtigungen.
+- Unter GNOME startet Xwayland bei Bedarf von selbst. Ist es ganz abgeschaltet, bleibt nur der Weg über Benachrichtigungen.
+
+**Nur ein Ton, sonst passiert nichts.**
+Die Taste wurde nur kurz getippt. Zum Diktieren **halten**, sprechen, loslassen. Für freihändig **doppelt tippen**. Die Leiste zeigt dazu einen Hinweis.
 
 **Der Text landet nur in der Zwischenablage.**
 `/dev/uinput` ist nicht beschreibbar. Führ `fluester setup` erneut aus. Danach zeigt `ls -l /dev/uinput` die Gruppe `input` mit den Rechten `crw-rw----`.

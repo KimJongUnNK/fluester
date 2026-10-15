@@ -28,6 +28,7 @@ static class SelfTest
             Storage();
             Input(Environment.GetEnvironmentVariable("FLUESTER_SELFTEST_INPUT") == "1");
             Clipboard(Environment.GetEnvironmentVariable("FLUESTER_SELFTEST_CLIPBOARD") == "1");
+            FlowBar(Environment.GetEnvironmentVariable("FLUESTER_SELFTEST_OVERLAY") == "1");
             Log("Werkzeuge: Aufnahme " + (Recorder.Tool ?? "fehlt") + " · Zwischenablage " + Desktop.ClipboardTool);
             Microphones();
             await Speech();
@@ -120,6 +121,43 @@ static class SelfTest
             Thread.Sleep((int)(pause * 1000));
         }
         return 0;
+    }
+
+    /// <summary>Flow-Leiste: jeden Zustand als Bild zeichnen (Paths.Data/selftest-leiste-*.png) und – mit Anzeige – das echte
+    /// Fenster öffnen: sichtbar, ohne Fensterverwaltung (nimmt nie den Fokus), unten in der Mitte.</summary>
+    static void FlowBar(bool required)
+    {
+        Log("Flow-Leiste:");
+        var states = new (string Name, Overlay.Phase Phase, string Text)[]
+        {
+            ("hoert-zu", Overlay.Phase.Listening, ""), ("schreibt", Overlay.Phase.Processing, "Schreibt …"),
+            ("fertig", Overlay.Phase.Done, "12 Wörter"), ("fehler", Overlay.Phase.Error, "Nichts verstanden – lauter oder näher ans Mikrofon?"),
+        };
+        try
+        {
+            var files = new List<string>();
+            foreach (var (name, phase, text) in states)
+            {
+                var file = Path.Combine(Paths.Data, $"selftest-leiste-{name}.png");
+                if (Overlay.RenderPng(file, phase, text) && new FileInfo(file).Length > 500) files.Add(Path.GetFileName(file));
+            }
+            Check(files.Count == states.Length, $"gezeichnet: {string.Join(", ", files)}", required);
+        }
+        catch (DllNotFoundException e) { Check(false, "cairo fehlt: " + e.Message.Split('\n')[0], required); return; }
+
+        using var bar = Overlay.TryCreate(out var why);
+        if (bar == null) { Check(false, "Fenster: " + why + " – Rückmeldung dann über Benachrichtigungen", required); return; }
+        bar.Listening(false, false);
+        for (int i = 0; i < 12; i++) { bar.PushLevel(i / 12f); Thread.Sleep(30); }
+        Thread.Sleep(300);
+        var st = bar.WindowState();
+        Check(st is { Viewable: true }, $"Fenster sichtbar auf {bar.Where}{(st is { } a ? $" · {a.W}×{a.H} bei {a.X},{a.Y}" : "")}", required);
+        Check(st is { OverrideRedirect: true }, "ohne Fensterverwaltung (nimmt nie den Fokus)", required);
+        bar.Done("12 Wörter");
+        Thread.Sleep(200);
+        bar.Idle();
+        Thread.Sleep(200);
+        Check(bar.WindowState() is { Viewable: false }, "blendet sich wieder aus", required);
     }
 
     static void Clipboard(bool required)

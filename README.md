@@ -48,7 +48,7 @@ Lieber von Hand? Alle Dateien liegen unter **[Releases](https://github.com/KimJo
 | --- | --- | --- | --- |
 | Diktat-Taste | **Fn / 🌐** (oder rechte ⌥ ⌘ ⌃) | **Strg rechts** (oder Strg+Win, ⇪, Alt rechts, F8) | **Strg rechts** (oder Strg+Super, ⇪, Alt rechts, F8) |
 | Zusatz für Command Mode | ⌃ | Umschalt | Umschalt |
-| Oberfläche | Menüleiste, Flow-Leiste, Einstellungen | Infobereich, Flow-Leiste, Einstellungen | Hintergrunddienst, Benachrichtigungen, Assistent im Terminal |
+| Oberfläche | Menüleiste, Flow-Leiste, Einstellungen | Infobereich, Flow-Leiste, Einstellungen | Flow-Leiste (X11/Xwayland), Hintergrunddienst, Assistent im Terminal |
 | Erkennung offline | Apple SpeechAnalyzer, whisper.cpp | whisper.cpp in der App (Grafikkarte über Vulkan) | whisper.cpp im Dienst (Grafikkarte über Vulkan) |
 | Erkennung Cloud | Groq, OpenAI, eigener Server | Groq, OpenAI, eigener Server | Groq, OpenAI, eigener Server |
 | KI-Bereinigung | Apple Intelligence, Groq/OpenAI/Ollama, Regeln | Groq/OpenAI/Ollama, Regeln | Groq/OpenAI/Ollama, Regeln |

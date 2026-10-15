@@ -23,6 +23,7 @@ static class Program
                 "start" => Cli.Start(),
                 "status" or "toggle" or "cancel" or "paste-last" or "stop" => Cli.Remote(cmd),
                 "mic" or "mics" or "mikro" or "mikrofon" or "microphone" or "input" => Mic.Run(rest),
+                "bar" or "leiste" => Cli.BarDemo(),
                 "model" or "models" => Cli.Model(rest).GetAwaiter().GetResult(),
                 "key" => Cli.Key(rest),
                 "config" => Cli.Config(),
@@ -62,6 +63,7 @@ static class Cli
               fluester setup              Einrichtung (Rechte, Werkzeuge, Mikrofon, Taste, Modell, Autostart)
               fluester mic                Mikrofon wählen und Pegel testen
               fluester mic list | test | <nummer>
+              fluester bar                Flow-Leiste zur Probe zeigen
               fluester start              im Hintergrund starten
               fluester run                im Vordergrund laufen lassen (zeigt Meldungen)
               fluester status             läuft er? Taste, Erkennung, Probleme
@@ -87,6 +89,29 @@ static class Cli
 
     public static int Version() { Console.WriteLine("Flüster " + Ver); return 0; }
 
+    /// <summary><c>fluester bar</c>: zeigt die Flow-Leiste ein paar Sekunden in allen Zuständen – zum Prüfen, ob sie erscheint.</summary>
+    public static int BarDemo()
+    {
+        Desktop.RepairEnvironment();
+        using var bar = Overlay.TryCreate(out var why);
+        if (bar == null) { Console.WriteLine("✗ Flow-Leiste nicht verfügbar: " + why + " – Flüster meldet sich dann über Benachrichtigungen."); return 1; }
+        Console.WriteLine($"Flow-Leiste auf {bar.Where} – Probe läuft 7 Sekunden, schau unten in die Bildschirmmitte …");
+        bar.Listening(false, false);
+        var rnd = new Random(7);
+        for (int i = 0; i < 60; i++) { bar.PushLevel((float)(0.15 + 0.8 * Math.Abs(Math.Sin(i * 0.31)) * (0.5 + 0.5 * rnd.NextDouble()))); Thread.Sleep(50); }
+        if (bar.WindowState() is { } st) Log.Write($"Flow-Leiste Probe: sichtbar={st.Viewable}, ohne Fensterverwaltung={st.OverrideRedirect}, {st.W}×{st.H} bei {st.X},{st.Y}");
+        bar.Processing(false);
+        Thread.Sleep(1500);
+        bar.Done("12 Wörter");
+        Thread.Sleep(1500);
+        bar.Error("Nur ein Test – alles gut");
+        Thread.Sleep(1500);
+        bar.Idle();
+        Thread.Sleep(200);
+        Console.WriteLine("✓ Fertig. Leiste nicht gesehen? Dann schick mir die Ausgabe von „fluester status“.");
+        return 0;
+    }
+
     /// <summary>Umgebung, die der Dienst braucht – eine systemd-Einheit erbt sie sonst nicht.</summary>
     static readonly string[] PassEnv =
     {
@@ -103,11 +128,12 @@ static class Cli
     {
         var self = Environment.ProcessPath!;
         var cmd = new List<string>();
-        // Gruppe „input“ frisch eingetragen, aber erst nach dem Neuanmelden aktiv: über „sg input“ sofort mit Tastaturzugriff
-        if (InputAccess.PendingRelogin)
+        // Über „sg input“ starten, sobald der Nutzer in der Gruppe eingetragen ist: wirkt sofort (auch vor dem Neuanmelden)
+        // und auch dann, wenn der systemd-Nutzerdienst noch mit den Gruppen von vor dem Eintragen läuft
+        if (InputAccess.Registered && Libc.geteuid() != 0 && Desktop.Which("sg") is { } sg)
         {
-            cmd.AddRange(new[] { Desktop.Which("sg")!, "input", "-c", $"exec '{self.Replace("'", "'\\''")}' run --background" });
-            Log.Write("Start über „sg input“ (Gruppe eingetragen, Anmeldung noch alt)");
+            cmd.AddRange(new[] { sg, "input", "-c", $"exec '{self.Replace("'", "'\\''")}' run --background" });
+            Log.Write("Start über „sg input“");
         }
         else cmd.AddRange(new[] { self, "run", "--background" });
 

@@ -28,6 +28,9 @@ sealed class Daemon : IDisposable
     readonly Stopwatch clock = Stopwatch.StartNew();
     string? keyboardProblem;
     string? missingMicNotified;
+    Overlay? bar;
+    string barInfo = "";
+    bool BarOk => bar is { Alive: true };
     readonly HashSet<string> problems = new();
 
     enum State { Idle, Recording, Processing }
@@ -76,6 +79,12 @@ sealed class Daemon : IDisposable
         watcher.Start();
         StartSocket();
         Prewarm();
+        // Flow-Leiste wie auf Mac/Windows; ohne X11/Xwayland bleiben Benachrichtigungen
+        bar = Overlay.TryCreate(out var whyNoBar, store.Current.ShowIdleBar);
+        barInfo = bar != null ? bar.Where : "aus – " + whyNoBar + " (Rückmeldung über Benachrichtigungen)";
+        Log.Write("Flow-Leiste: " + barInfo);
+        recorder.Level += l => bar?.PushLevel(l);
+        bar?.Idle();
 
         var timer = new Timer(_ => Post(Tick), null, 50, 50);
         Console.CancelKeyPress += (_, e) => { e.Cancel = true; Shutdown("Strg+C"); };
@@ -127,6 +136,8 @@ sealed class Daemon : IDisposable
             Desktop.Notify("Flüster startet neu", gpu
                 ? "Die Grafikkarte hing bei der Erkennung. Flüster rechnet ab jetzt mit dem Prozessor – gleich wieder bereit."
                 : "Die Erkennung hing. Flüster ist gleich wieder bereit.", urgent: true);
+        bar?.Error(gpu ? "Grafikkarte hing – Flüster startet neu (Prozessor)" : "Erkennung hing – Flüster startet neu", 3);
+        Thread.Sleep(600);
         Restart(70);
     }
 
@@ -169,6 +180,11 @@ sealed class Daemon : IDisposable
         tracker.Choice = s.Hotkey;
         tracker.Reset();
         gestures.DoubleTapEnabled = s.HandsFreeDoubleTap;
+        if (bar != null)
+        {
+            bar.ShowWhenIdle = s.ShowIdleBar;
+            if (state == State.Idle && bar.Current is Overlay.Phase.Idle or Overlay.Phase.Hidden) bar.Idle();
+        }
     }
 
     void WatchSettings()
@@ -210,7 +226,8 @@ sealed class Daemon : IDisposable
     void Tick()
     {
         var a = gestures.Tick(Now);
-        if (a.Kind != HotkeyGestures.Kind.None) Handle(a);
+        if (a.Kind == HotkeyGestures.Kind.Cancel && state == State.Recording) TappedOnly();
+        else if (a.Kind != HotkeyGestures.Kind.None) Handle(a);
         if (state == State.Recording && (DateTime.UtcNow - recorder.Started).TotalSeconds > 900) Finish();
         if (state == State.Processing && clock.Elapsed.TotalSeconds - processingSince > processingLimit) ProcessingStuck();
     }
@@ -223,7 +240,10 @@ sealed class Daemon : IDisposable
             case HotkeyGestures.Kind.StopAndProcess: Finish(); break;
             case HotkeyGestures.Kind.Cancel: Cancel(false); break;
             case HotkeyGestures.Kind.SwitchToHandsFree:
-                if (state == State.Recording && store.Current.Notifications) Desktop.Notify("🎙 Flüster hört zu (freihändig)", "Taste einmal tippen zum Beenden.");
+                if (state != State.Recording) break;
+                Log.Write("Freihändig");
+                if (BarOk) bar!.Listening(true, isCommand);
+                else if (store.Current.Notifications) Desktop.Notify("🎙 Flüster hört zu (freihändig)", "Taste einmal tippen zum Beenden.");
                 break;
         }
     }
@@ -238,7 +258,7 @@ sealed class Daemon : IDisposable
                 gestures.Reset();
                 double busy = clock.Elapsed.TotalSeconds - processingSince;
                 Log.Write($"Taste während der Erkennung gedrückt (läuft seit {busy:0.0} s)");
-                if (store.Current.Notifications) Desktop.Notify("Moment …", $"Das letzte Diktat wird noch erkannt ({busy:0} s).");
+                if (!BarOk && store.Current.Notifications) Desktop.Notify("Moment …", $"Das letzte Diktat wird noch erkannt ({busy:0} s).");
             }
             return;
         }
@@ -268,6 +288,20 @@ sealed class Daemon : IDisposable
         state = State.Recording;
         var s = store.Current;
         if (s.Sounds) Desktop.Sound("start");
+        if (BarOk) bar!.Listening(false, command);
+        else if (s.Notifications) Desktop.Notify(command ? "✨ Flüster hört zu (Command Mode)" : "🎙 Flüster hört zu", "Loslassen zum Beenden · doppelt tippen = freihändig");
+    }
+
+    /// <summary>Nur kurz getippt (kein Halten, kein zweiter Tipp): Aufnahme verwerfen und erklären, statt still nichts zu tun.</summary>
+    void TappedOnly()
+    {
+        Cancel(false);
+        Log.Write("Nur kurz getippt – Diktat verworfen");
+        var s = store.Current;
+        if (s.Sounds) Desktop.Sound("stop");
+        var key = s.Hotkey.Label(linux: true);
+        if (BarOk) bar!.Error($"{key} halten zum Sprechen · 2× tippen = freihändig", 3.5);
+        else if (s.Notifications) Desktop.Notify("Taste halten zum Sprechen", $"{key} gedrückt halten, sprechen, loslassen. Doppelt tippen = freihändig.");
     }
 
     void UpgradeToCommand()
@@ -275,7 +309,8 @@ sealed class Daemon : IDisposable
         if (state != State.Recording || isCommand || !store.Current.CommandModeEnabled || (DateTime.UtcNow - recorder.Started).TotalSeconds > 1.5) return;
         isCommand = true;
         selection = Desktop.GetClipboard(primary: true);
-        if (store.Current.Notifications) Desktop.Notify("✨ Command Mode", selection != null ? "Anweisung für den markierten Text sprechen." : "Was soll Flüster schreiben?");
+        if (BarOk) bar!.Listening(gestures.State == HotkeyGestures.GestureState.HandsFree, true);
+        else if (store.Current.Notifications) Desktop.Notify("✨ Command Mode", selection != null ? "Anweisung für den markierten Text sprechen." : "Was soll Flüster schreiben?");
     }
 
     void Finish()
@@ -286,8 +321,9 @@ sealed class Daemon : IDisposable
         if (s.Sounds) Desktop.Sound("stop");
         double seconds = samples.Length / (double)AudioUtil.SampleRate;
         if (seconds < 0.3 && recorder.LastError != null) { Fail("Aufnahme fehlgeschlagen: " + recorder.LastError + " – Mikrofon prüfen: fluester mic"); return; }
-        if (seconds < 0.3) { state = State.Idle; Log.Write("Aufnahme verworfen (zu kurz)"); return; }
+        if (seconds < 0.3) { state = State.Idle; Log.Write("Aufnahme verworfen (zu kurz)"); bar?.Idle(); return; }
         state = State.Processing;
+        if (BarOk) bar!.Processing(isCommand);
         processingSince = clock.Elapsed.TotalSeconds;
         // Großzügig: lokales Whisper braucht auf langsamen Prozessoren etwa Echtzeit, Cloud hat eigene Zeitlimits
         processingLimit = (s.Engine == EngineChoice.Cloud ? 75 : 30 + 3 * seconds) + (s.Cleanup == CleanupChoice.Llm ? 15 : 0);
@@ -321,15 +357,19 @@ sealed class Daemon : IDisposable
         state = State.Idle;
         if (result == null || string.IsNullOrWhiteSpace(result.Text))
         {
-            if (s.Notifications) Desktop.Notify("Nichts verstanden", "");
+            Log.Write($"Nichts verstanden ({seconds:0.0} s Audio)");
+            if (BarOk) bar!.Error("Nichts verstanden – lauter oder näher ans Mikrofon?", 3);
+            else if (s.Notifications) Desktop.Notify("Nichts verstanden", "");
             return;
         }
         bool inserted = Insert(result.Text, s, app);
+        int words = result.Text.Split(' ', StringSplitOptions.RemoveEmptyEntries).Length;
+        if (BarOk) bar!.Done(inserted ? (words == 1 ? "1 Wort" : $"{words} Wörter") : "In der Zwischenablage – Strg+V", inserted ? 1.4 : 3.5);
         Log.Write($"Diktat fertig nach {clock.Elapsed.TotalSeconds - processingSince:0.0} s: {result.Text.Split(' ', StringSplitOptions.RemoveEmptyEntries).Length} Wörter · {(inserted ? "eingefügt" : "in der Zwischenablage")} · {result.Engine}");
         if (s.KeepHistory)
             history.Add(new HistoryItem { Raw = result.Raw, Text = result.Text, AppName = app.Name, AppId = app.Id, Seconds = seconds, IsCommand = result.IsCommand, Engine = result.Engine });
         if (result.Warning != null) Log.Write("Hinweis: " + result.Warning);
-        if (!inserted && s.Notifications) Desktop.Notify("In der Zwischenablage", "Mit Strg+V einfügen.");
+        if (!inserted && !BarOk && s.Notifications) Desktop.Notify("In der Zwischenablage", "Mit Strg+V einfügen.");
     }
 
     /// <summary>Text einfügen: Zwischenablage setzen, Strg+V (Terminals: Strg+Umschalt+V) über die virtuelle Tastatur, alte Zwischenablage zurück.</summary>
@@ -398,7 +438,9 @@ sealed class Daemon : IDisposable
         Console.Error.WriteLine("✗ " + message);
         var s = store.Current;
         if (s.Sounds) Desktop.Sound("error");
-        if (s.Notifications) Desktop.Notify("Flüster", message, urgent: true);
+        if (BarOk) bar!.Error(message, 5);
+        // Lange Meldungen passen nicht in die Leiste – dann zusätzlich als Benachrichtigung
+        if (s.Notifications && (!BarOk || message.Length > 60)) Desktop.Notify("Flüster", message, urgent: true);
     }
 
     void Cancel(bool explicitly)
@@ -408,7 +450,8 @@ sealed class Daemon : IDisposable
         gestures.Reset();
         bool was = state != State.Idle;
         state = State.Idle;
-        if (explicitly && was && store.Current.Notifications) Desktop.Notify("Abgebrochen", "");
+        if (BarOk) { if (explicitly && was) bar!.Error("Abgebrochen", 1.2); else bar!.Idle(); }
+        else if (explicitly && was && store.Current.Notifications) Desktop.Notify("Abgebrochen", "");
     }
 
     // ───────────── Steuerung von außen: fluester toggle | status | cancel | paste-last | stop
@@ -481,6 +524,7 @@ sealed class Daemon : IDisposable
                     Flüster läuft · {(state switch { State.Recording => "hört zu", State.Processing => $"erkennt seit {clock.Elapsed.TotalSeconds - processingSince:0} s", _ => "bereit" })} · PID {Environment.ProcessId}
                       Taste:     {s.Hotkey.Label(linux: true)}
                       Mikrofon:  {Recorder.Describe(s.MicrophoneId)}
+                      Leiste:    {(bar is { Alive: false } ? "Verbindung zur Anzeige verloren – fluester stop; fluester start" : barInfo)}
                       Erkennung: {engine}
                     """ + (problems.Count > 0 ? "\nProbleme:\n  " + string.Join("\n  ", problems) : "");
         }
@@ -510,6 +554,7 @@ sealed class Daemon : IDisposable
 
     public void Dispose()
     {
+        bar?.Dispose();
         watcher.Dispose();
         recorder.Dispose();
         keyboard.Dispose();
