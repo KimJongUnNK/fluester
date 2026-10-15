@@ -18,6 +18,8 @@ static class Program
             return cmd switch
             {
                 "run" => RunDaemon(rest.Contains("--background")),
+                "app" or "gui" or "fenster" or "einstellungen" or "settings" or "open" => Gui.DesktopApp.Run(rest),
+                "integrate" => Cli.Integrate(),
                 "e2e-keys" => SelfTest.PressHotkey(rest),
                 "setup" => Setup.Run(rest),
                 "start" => Cli.Start(),
@@ -60,7 +62,8 @@ static class Cli
         Console.WriteLine($"""
             Flüster {Ver} – Diktieren in jeder App. Taste halten, sprechen, loslassen.
 
-              fluester setup              Einrichtung (Rechte, Werkzeuge, Mikrofon, Taste, Modell, Autostart)
+              fluester app                App-Fenster: Einstellungen, Verlauf, Wörterbuch, Einrichtung (auch im App-Menü)
+              fluester setup              Einrichtung im Terminal (Rechte, Werkzeuge, Mikrofon, Taste, Modell, Autostart)
               fluester mic                Mikrofon wählen und Pegel testen
               fluester mic list | test | <nummer>
               fluester bar                Flow-Leiste zur Probe zeigen
@@ -88,6 +91,15 @@ static class Cli
     static string Ver => typeof(Cli).Assembly.GetName().Version?.ToString(3) ?? "dev";
 
     public static int Version() { Console.WriteLine("Flüster " + Ver); return 0; }
+
+    /// <summary><c>fluester integrate</c>: Eintrag im App-Menü und Symbol anlegen (macht install.sh nach jeder Installation).</summary>
+    public static int Integrate()
+    {
+        Gui.Integration.Install();
+        Console.WriteLine("✓ App-Menü-Eintrag „Flüster“: " + Gui.Integration.DesktopFile);
+        if (!Gui.Integration.CanShowWindow(out var why)) Console.WriteLine("  ! " + why);
+        return 0;
+    }
 
     /// <summary><c>fluester bar</c>: zeigt die Flow-Leiste ein paar Sekunden in allen Zuständen – zum Prüfen, ob sie erscheint.</summary>
     public static int BarDemo()

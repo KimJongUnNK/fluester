@@ -42,7 +42,7 @@ Du hältst **Strg rechts**, sprichst und lässt los. Der Text landet sauber form
 
 ## Einrichten
 
-> **Flüster hat kein Fenster in der Taskleiste.** Es sitzt unten rechts im **Infobereich** (neben der Uhr, eventuell unter dem Pfeil **^**). Ein Linksklick öffnet die Einstellungen, ein Rechtsklick das Menü.
+> **Flüster öffnest du wie jede App:** **„Flüster“ im Startmenü** zeigt das Fenster mit Seitenleiste (Allgemein, Erkennung, KI-Bereinigung, Stile, Wörterbuch, Textbausteine, Verlauf, Über) – wie am Mac. Schließt du es, läuft Flüster unten rechts im **Infobereich** weiter (neben der Uhr, eventuell unter dem Pfeil **^**): Linksklick öffnet das Fenster wieder, Rechtsklick das Menü. Beim Start mit Windows bleibt es still im Infobereich.
 
 Beim ersten Start öffnet sich die Einrichtung:
 

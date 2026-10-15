@@ -1,0 +1,35 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Flüster – App-Symbol: Verlauf Nachtblau → Violett → Magenta, weiße Wellenform (wie am Mac) -->
+<svg xmlns="http://www.w3.org/2000/svg" width="128" height="128" viewBox="0 0 128 128">
+  <defs>
+    <linearGradient id="bg" x1="0.2" y1="1" x2="0.8" y2="0">
+      <stop offset="0" stop-color="#0f1233"/>
+      <stop offset="0.62" stop-color="#4f29c7"/>
+      <stop offset="1" stop-color="#db409e"/>
+    </linearGradient>
+    <linearGradient id="gloss" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#ffffff" stop-opacity="0.18"/>
+      <stop offset="1" stop-color="#ffffff" stop-opacity="0"/>
+    </linearGradient>
+    <filter id="glow" x="-50%" y="-50%" width="200%" height="200%">
+      <feGaussianBlur stdDeviation="1.8" result="b"/>
+      <feFlood flood-color="#ffffff" flood-opacity="0.45"/>
+      <feComposite in2="b" operator="in"/>
+      <feMerge><feMergeNode/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+  </defs>
+  <rect x="8" y="10" width="112" height="112" rx="26" fill="#000000" opacity="0.18"/>
+  <rect x="8" y="8" width="112" height="112" rx="26" fill="url(#bg)"/>
+  <path d="M8 34a26 26 0 0 1 26-26h60a26 26 0 0 1 26 26v30H8z" fill="url(#gloss)"/>
+  <g fill="#ffffff" filter="url(#glow)">
+    <rect x="23.125" y="54.875" width="5.75" height="18.250" rx="2.875"/>
+    <rect x="32.625" y="50.600" width="5.75" height="26.800" rx="2.875"/>
+    <rect x="42.125" y="44.900" width="5.75" height="38.200" rx="2.875"/>
+    <rect x="51.625" y="39.200" width="5.75" height="49.600" rx="2.875"/>
+    <rect x="61.125" y="35.875" width="5.75" height="56.250" rx="2.875"/>
+    <rect x="70.625" y="39.200" width="5.75" height="49.600" rx="2.875"/>
+    <rect x="80.125" y="44.900" width="5.75" height="38.200" rx="2.875"/>
+    <rect x="89.625" y="50.600" width="5.75" height="26.800" rx="2.875"/>
+    <rect x="99.125" y="54.875" width="5.75" height="18.250" rx="2.875"/>
+  </g>
+</svg>

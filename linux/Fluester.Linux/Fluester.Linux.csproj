@@ -1,5 +1,5 @@
 <Project Sdk="Microsoft.NET.Sdk">
-  <!-- Flüster für Linux: Hintergrunddienst + Terminal-Assistent. X11 und Wayland. -->
+  <!-- Flüster für Linux: Hintergrunddienst, App-Fenster (GTK 4 + libadwaita) und Terminal-Assistent. X11 und Wayland. -->
   <PropertyGroup>
     <OutputType>Exe</OutputType>
     <TargetFramework>net10.0</TargetFramework>
@@ -8,7 +8,7 @@
     <LangVersion>latest</LangVersion>
     <RootNamespace>Fluester.Linux</RootNamespace>
     <AssemblyName>fluester</AssemblyName>
-    <Version>1.2.0</Version>
+    <Version>1.3.0</Version>
     <IncludeSourceRevisionInInformationalVersion>false</IncludeSourceRevisionInInformationalVersion>
     <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
@@ -19,6 +19,11 @@
   <ItemGroup>
     <PackageReference Include="Whisper.net.Runtime" Version="1.9.1" />
     <PackageReference Include="Whisper.net.Runtime.Vulkan" Version="1.9.1" />
+    <!-- App-Fenster: nutzt die GTK-4- und libadwaita-Bibliotheken des Systems (nichts Natives im Paket) -->
+    <PackageReference Include="GirCore.Adw-1" Version="0.8.1" />
+  </ItemGroup>
+  <ItemGroup>
+    <EmbeddedResource Include="Gui/fluester.svg" LogicalName="fluester.svg" />
   </ItemGroup>
   <ItemGroup>
     <ProjectReference Include="../../dotnet/Fluester.Engine/Fluester.Engine.csproj" />

@@ -41,9 +41,11 @@ sealed class TrayApp : ApplicationContext
 
         var s = store.Current;
         if (!s.OnboardingDone) ShowOnboarding();
-        else if (!background)
-            tray.ShowBalloonTip(4000, "Flüster läuft", $"{s.Hotkey.Label()} halten, sprechen, loslassen. Das Menü findest du hier unten rechts.", ToolTipIcon.None);
+        // Von Hand gestartet (Startmenü, Doppelklick) → Fenster wie eine App; Autostart bleibt still im Infobereich
+        else if (!background) ShowSettings(SettingsPage.General);
     }
+
+    bool closedHintShown;
 
     static Icon LoadIcon()
     {
@@ -148,7 +150,14 @@ sealed class TrayApp : ApplicationContext
         if (settingsForm == null || settingsForm.IsDisposed)
         {
             settingsForm = new SettingsForm(store, history, secrets, controller);
-            settingsForm.FormClosed += (_, _) => settingsForm = null;
+            settingsForm.FormClosed += (_, _) =>
+            {
+                settingsForm = null;
+                // Einmal pro Start erklären, dass Schließen nicht beendet
+                if (closedHintShown) return;
+                closedHintShown = true;
+                tray.ShowBalloonTip(4000, "Flüster läuft weiter", $"{store.Current.Hotkey.Label()} halten, sprechen, loslassen. Fenster und Menü: Symbol hier unten rechts.", ToolTipIcon.None);
+            };
         }
         settingsForm.Show(page);
         settingsForm.Show();

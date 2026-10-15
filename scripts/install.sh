@@ -105,7 +105,10 @@ install_linux() {
     if [ -x "$APPDIR/fluester" ]; then "$APPDIR/fluester" stop >/dev/null 2>&1 || true; fi
     pkill -f "$APPDIR/fluester run" 2>/dev/null || true
     rm -rf "$APPDIR"
-    rm -f "$BIN/fluester" "$CONFIG/autostart/fluester.desktop" "${XDG_DATA_HOME:-$HOME/.local/share}/applications/fluester-toggle.desktop"
+    local SHARE="${XDG_DATA_HOME:-$HOME/.local/share}"
+    rm -f "$BIN/fluester" "$CONFIG/autostart/fluester.desktop" "$SHARE/applications/fluester-toggle.desktop" \
+      "$SHARE/applications/io.github.kimjongunnk.Fluester.desktop" "$SHARE/icons/hicolor/scalable/apps/io.github.kimjongunnk.Fluester.svg"
+    command -v update-desktop-database >/dev/null && update-desktop-database -q "$SHARE/applications" 2>/dev/null || true
     ok "Flüster entfernt."
     echo "${dim}Einstellungen: $CONFIG/fluester · Modelle und Verlauf: $DATA"
     echo "Ganz weg damit: rm -rf $CONFIG/fluester $DATA"
@@ -143,6 +146,9 @@ install_linux() {
   mv "$APPDIR.new" "$APPDIR"
   ln -sf "$APPDIR/fluester" "$BIN/fluester"
 
+  # Eintrag „Flüster“ im App-Menü (Fenster mit Einstellungen) samt Symbol
+  "$APPDIR/fluester" integrate >/dev/null 2>&1 || true
+
   local version; version="$("$APPDIR/fluester" version 2>/dev/null || echo "Flüster")"
   echo
   ok "$version ist $([ "$UPDATE" = 1 ] && echo aktualisiert || echo installiert) ($BIN/fluester)."
@@ -161,9 +167,21 @@ install_linux() {
     return
   fi
 
-  # Erstinstallation: Einrichtung im Terminal (liest von /dev/tty, auch bei „curl | bash“)
-  if [ "${FLUESTER_NO_SETUP:-0}" != 1 ] && [ -r /dev/tty ] && { : < /dev/tty; } 2>/dev/null; then
+  # Erstinstallation: Einrichtung im App-Fenster (wie am Mac), ohne GTK 4/libadwaita im Terminal
+  local gui_ok=0
+  "$APPDIR/fluester" app --check >/dev/null 2>&1 && gui_ok=1
+  if [ "${FLUESTER_NO_SETUP:-0}" = 1 ]; then
     echo
+    echo "  Weiter mit: ${bold}fluester app${reset} (Fenster) oder ${bold}fluester setup${reset} (Terminal)"
+  elif [ "$gui_ok" = 1 ] && [ "${FLUESTER_SETUP:-}" != terminal ]; then
+    echo
+    echo "  Die Einrichtung öffnet sich jetzt im Fenster ${bold}Flüster${reset} – später jederzeit über das App-Menü."
+    if command -v setsid >/dev/null; then setsid "$APPDIR/fluester" app >/dev/null 2>&1 < /dev/null &
+    else nohup "$APPDIR/fluester" app >/dev/null 2>&1 < /dev/null & fi
+  elif [ -r /dev/tty ] && { : < /dev/tty; } 2>/dev/null; then
+    # Liest von /dev/tty, auch bei „curl | bash“
+    echo
+    [ "$gui_ok" = 0 ] && echo "  ${dim}$("$APPDIR/fluester" app --check 2>&1 | sed 's/^✗ //')${reset}"
     "$APPDIR/fluester" setup < /dev/tty || true
   else
     echo

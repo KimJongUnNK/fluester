@@ -2,6 +2,25 @@
 
 Alle wichtigen Änderungen an Flüster. Versionen folgen [Semantic Versioning](https://semver.org/lang/de/).
 
+## [1.3.0] – 2026-10-15
+
+Linux bekommt ein App-Fenster wie am Mac. Windows öffnet sein Fenster jetzt wie eine App.
+
+- **Linux – App-Fenster „Flüster“** (GTK 4 und libadwaita, passt zu GNOME und KDE, hell und dunkel):
+  - Seitenleiste mit denselben Bereichen wie am Mac: Allgemein, Erkennung, KI-Bereinigung, Stile, Wörterbuch, Textbausteine, Verlauf, Berechtigungen, Über Flüster.
+  - **Allgemein:** Diktieren an/aus, Hinweise des Dienstes mit „Beheben“-Knopf, Taste, Mikrofon mit Live-Pegel, Einfügen, Töne, Leiste, Autostart.
+  - **Erkennung:** Modelle per Klick laden (mit Fortschritt), auswählen und löschen; Cloud-Anbieter mit Schlüssel und Verbindungstest.
+  - **Verlauf:** Statistik, Suche, Klick kopiert. Neue Diktate erscheinen sofort.
+  - **Berechtigungen:** Gruppe `input` und `/dev/uinput` mit einem Klick einrichten (Passwortabfrage über pkexec), fehlende Werkzeuge nachinstallieren. Wirkt sofort, ohne Neuanmelden.
+  - **Über Flüster:** sucht nach Updates und aktualisiert mit einem Klick.
+  - Das Fenster steuert nur; diktiert wird weiter vom Hintergrunddienst. Schließen beendet Flüster nicht. Öffnet man es ein zweites Mal, kommt das offene Fenster nach vorn.
+- **Linux – grafische Einrichtung** in sechs Schritten: Willkommen, Berechtigungen, Mikrofon (mit Pegel), Taste, Erkennung (Modell laden), Ausprobieren. Der Installer öffnet sie nach der Erstinstallation von selbst. Ohne GTK 4/libadwaita oder ohne grafische Sitzung bleibt es beim Assistenten im Terminal.
+- **Linux – App-Menü:** Eintrag „Flüster“ mit eigenem Symbol und der Aktion „Diktat an/aus“ (Rechtsklick). Der frühere Extra-Eintrag „Flüster: Diktat an/aus“ entfällt. Neu: `fluester app`, `fluester integrate`.
+- **Linux – Dienst:** liefert seinen Stand maschinenlesbar (`status-json`) für das Fenster. Ein inzwischen geladenes Modell verschwindet aus den Problemen, ohne Neustart.
+- **Modell-Spiegel:** `FLUESTER_MODEL_MIRROR` lädt Whisper-Modelle von einem Spiegel statt von Hugging Face (Firmennetz, Firewall).
+- **Windows:** Start aus dem Startmenü öffnet das Einstellungsfenster wie bei einer App, statt nur eine Sprechblase zu zeigen. Beim ersten Schließen erklärt eine Sprechblase, dass Flüster im Infobereich weiterläuft. Der Autostart bleibt still.
+- **CI:** Der Linux-Selbsttest öffnet das Fenster und zeichnet jede Seite und jeden Einrichtungsschritt als Bild (Artefakt „App-Fenster-Linux“). Geprüft werden außerdem der App-Menü-Eintrag (`desktop-file-validate`) und dass der Installer ihn anlegt und wieder entfernt.
+
 ## [1.2.0] – 2026-10-15
 
 Linux: Flow-Leiste wie auf Mac und Windows.

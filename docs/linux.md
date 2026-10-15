@@ -12,7 +12,7 @@
 
 ---
 
-Du hältst **Strg rechts**, sprichst und lässt los. Der Text landet sauber formuliert dort, wo dein Cursor steht. Das klappt in jeder App unter **X11 und Wayland**, auf GNOME, KDE, Cinnamon, XFCE, Sway, Hyprland und anderen Oberflächen. Flüster läuft als schlanker Hintergrunddienst mit **Flow-Leiste** unten in der Bildschirmmitte, wie auf Mac und Windows. Eingerichtet wird es mit einem Assistenten im Terminal.
+Du hältst **Strg rechts**, sprichst und lässt los. Der Text landet sauber formuliert dort, wo dein Cursor steht. Das klappt in jeder App unter **X11 und Wayland**, auf GNOME, KDE, Cinnamon, XFCE, Sway, Hyprland und anderen Oberflächen. Flüster läuft als schlanker Hintergrunddienst mit **Flow-Leiste** unten in der Bildschirmmitte, wie auf Mac und Windows. Dazu gibt es ein **App-Fenster wie am Mac**: Einstellungen mit Seitenleiste, Verlauf, Wörterbuch und eine Einrichtung in sechs Schritten. Wer lieber im Terminal arbeitet, findet dort alles ebenfalls.
 
 **So funktioniert es:**
 - **Diktat-Taste:** direkt über die Eingabegeräte des Kernels (`/dev/input`). Damit klappt sie unabhängig vom Desktop.
@@ -25,6 +25,7 @@ Du hältst **Strg rechts**, sprichst und lässt los. Der Text landet sauber form
 - Linux auf x86_64 oder arm64 mit glibc, zum Beispiel Ubuntu 22.04+, Debian 12+, Fedora 39+, Arch, openSUSE oder Mint.
 - PipeWire oder PulseAudio.
 - Rund 1 GB Platz.
+- Fürs App-Fenster: GTK 4 und libadwaita. Auf GNOME-Systemen (Fedora Workstation, Ubuntu) sind sie schon da. Sonst: `sudo dnf install libadwaita` (Fedora KDE) bzw. `sudo apt install libadwaita-1-0` (Kubuntu, Mint). Ohne sie geht alles über das Terminal.
 
 1. Terminal öffnen und einfügen:
 
@@ -32,13 +33,15 @@ Du hältst **Strg rechts**, sprichst und lässt los. Der Text landet sauber form
    curl -fsSL https://raw.githubusercontent.com/KimJongUnNK/fluester/main/scripts/install.sh | bash
    ```
 
-2. Der Assistent (`fluester setup`) startet von selbst und erledigt:
-   - **Rechte:** Er nimmt dich in die Gruppe `input` auf und legt eine udev-Regel für `/dev/uinput` an. Das geht einmalig mit `sudo`, der Assistent fragt vorher.
-   - **Werkzeuge:** Er schlägt fehlende Pakete passend zu deiner Distribution vor (`wl-clipboard` bzw. `xclip`, `pulseaudio-utils`, `libnotify`) und installiert sie auf Wunsch.
-   - **Mikrofon:** Er listet alle Mikrofone mit Nummer auf. Du wählst eins und siehst den Pegel live, während du sprichst.
-   - **Taste, Erkennung und Modell:** Er lädt **Large v3 Turbo** (547 MB) oder ein kleineres Modell herunter.
-   - **Autostart:** Flüster startet ab dann bei jeder Anmeldung.
-3. **Einmal ab- und wieder anmelden**, falls der Assistent dich in die Gruppe `input` aufgenommen hat. Flüster startet danach von selbst.
+2. Danach öffnet sich das Fenster **Flüster** mit der Einrichtung:
+   - **Berechtigungen:** Ein Klick auf „Einrichten …“ nimmt dich in die Gruppe `input` auf und legt eine udev-Regel für `/dev/uinput` an. Dein Passwort fragt das System einmal ab (pkexec). Das wirkt **sofort**, ohne Ab- und Anmelden. Fehlende Werkzeuge (`wl-clipboard` bzw. `xclip`, `pulseaudio-utils`, `libnotify`) installiert ein zweiter Knopf.
+   - **Mikrofon:** Auswahl mit Live-Pegel. Sprich ein paar Worte, der Balken muss ausschlagen.
+   - **Diktat-Taste:** Strg rechts ist empfohlen.
+   - **Erkennung:** Ein Klick lädt **Large v3 Turbo** (547 MB) oder **Small** für Rechner ohne starke Grafikkarte. Alternativ Groq Cloud mit Schlüssel.
+   - **Ausprobieren:** Flüster startet, du diktierst direkt ins Testfeld. Autostart ist voreingestellt.
+3. Fertig. Flüster läuft im Hintergrund, das Fenster darf zu. Wiederfinden: **„Flüster“ im App-Menü**.
+
+**Ohne GTK 4/libadwaita oder ohne grafische Sitzung** startet stattdessen der Assistent im Terminal (`fluester setup`) mit denselben Schritten. Erzwingen lässt er sich mit `FLUESTER_SETUP=terminal`. Hat dich der Assistent in die Gruppe `input` aufgenommen, startet Flüster über `sg input` sofort mit Tastaturzugriff; nach dem nächsten Anmelden läuft es ganz normal.
 
 Installiert wird nur für deinen Nutzer, nach `~/.local/share/fluester/app`. Der Befehl `fluester` liegt in `~/.local/bin`.
 
@@ -55,6 +58,28 @@ Installiert wird nur für deinen Nutzer, nach `~/.local/share/fluester/app`. Der
 | Zeilenumbruch | „neue Zeile“, „neuer Absatz“ |
 | Korrigieren | „um 3, ich meine um 4“ → „um 4“ · „streich das“ |
 | Liste | „erstens Milch, zweitens Brot, drittens Eier“ |
+
+### App-Fenster
+
+**„Flüster“ im App-Menü** öffnet das Fenster, im Terminal geht es mit `fluester app`. Es hat dieselben Bereiche wie am Mac:
+
+| Seite | Was du dort machst |
+| --- | --- |
+| **Allgemein** | Diktieren an/aus, Hinweise mit „Beheben“-Knopf, Taste, Doppeltipp, Command Mode, Mikrofon mit Pegeltest, Einfügen, Töne, Leiste, Autostart |
+| **Erkennung** | Whisper lokal oder Cloud, Sprache, Modelle laden und löschen (mit Fortschritt), Grafikkarte |
+| **KI-Bereinigung** | Nur Regeln oder Sprachmodell (Groq, OpenAI, Ollama), Regeln einzeln, Text zum Ausprobieren |
+| **Stile** | Formell, Locker … je App-Gruppe, mit Beispiel |
+| **Wörterbuch** | Schreibweisen und „klingt wie“ – hinzufügen, ändern, löschen |
+| **Textbausteine** | Stichwort sagen, ganzer Text erscheint (auch mehrzeilig) |
+| **Verlauf** | Statistik, Suche, Klick kopiert ein Diktat. Neue Diktate erscheinen sofort |
+| **Berechtigungen** | Gruppe `input`, `/dev/uinput`, Werkzeuge – fehlt etwas, richtet ein Klick es ein |
+| **Über Flüster** | Version und Updates (ein Klick aktualisiert), Leiste testen, Einrichtung erneut, Protokoll |
+
+- **Das Fenster ist nicht Flüster selbst:** Diktiert wird vom Hintergrunddienst. Schließt du das Fenster, diktierst du weiter. Unten links steht, ob der Dienst läuft.
+- **Änderungen gelten sofort**, ohne Neustart – auch die aus dem Terminal oder dem Editor; das Fenster zeigt sie beim nächsten Öffnen der Seite.
+- **Ein Fenster:** Öffnest du Flüster ein zweites Mal, kommt das offene Fenster nach vorn.
+- **Rechtsklick aufs Symbol** (Dock, App-Menü): „Diktat an/aus (freihändig)“.
+- Hell und dunkel folgen der Systemeinstellung.
 
 ### Flow-Leiste
 
@@ -99,7 +124,8 @@ Pegel von Yeti Stereo Microphone Analog Stereo – sprich ein paar Worte …
 ### Befehle
 
 ```text
-fluester setup              Einrichtung erneut starten
+fluester app                App-Fenster öffnen (Einstellungen, Verlauf, Einrichtung)
+fluester setup              Einrichtung im Terminal
 fluester mic                Mikrofon wählen und Pegel testen
 fluester mic list | test | <nummer>
 fluester bar                Flow-Leiste zur Probe zeigen
@@ -114,15 +140,16 @@ fluester model list | download <id> | delete <id>
 fluester key groq <schlüssel>
 fluester config             Einstellungen im Editor öffnen
 fluester autostart on|off
+fluester integrate          Eintrag „Flüster“ im App-Menü anlegen (macht der Installer)
 ```
 
-**Ohne Gruppe `input`:** Leg im Desktop ein eigenes Tastenkürzel an, das `fluester toggle` ausführt. Unter GNOME geht das über **Einstellungen › Tastatur › Eigene Tastenkürzel**. Ein Druck startet das Diktat, der nächste beendet es. Der Eintrag „Flüster: Diktat an/aus“ steht nach der Einrichtung auch im App-Menü.
+**Ohne Gruppe `input`:** Leg im Desktop ein eigenes Tastenkürzel an, das `fluester toggle` ausführt. Unter GNOME geht das über **Einstellungen › Tastatur › Eigene Tastenkürzel**. Ein Druck startet das Diktat, der nächste beendet es. Dasselbe steht als „Diktat an/aus“ im Rechtsklick-Menü des App-Symbols.
 
 ---
 
 ## Einstellungen
 
-`fluester config` öffnet `~/.config/fluester/settings.json` im Editor. Ein laufendes Flüster übernimmt Änderungen sofort. Die wichtigsten Felder:
+Am bequemsten im **App-Fenster**. Alternativ öffnet `fluester config` die Datei `~/.config/fluester/settings.json` im Editor. Ein laufendes Flüster übernimmt Änderungen sofort. Die wichtigsten Felder:
 
 | Feld | Werte |
 | --- | --- |
@@ -139,25 +166,25 @@ fluester autostart on|off
 | `dictionary`, `snippets`, `styles` | Wörterbuch, Textbausteine und Stil je App-Gruppe, wie auf dem Mac |
 | `sounds`, `notifications` | Töne und Benachrichtigungen an/aus |
 
-**API-Schlüssel** setzt du mit `fluester key groq gsk_…`. Er liegt in `~/.config/fluester/keys.json`, die Datei ist nur für dich lesbar. Alternativ wirken auch die Umgebungsvariablen `GROQ_API_KEY` und `OPENAI_API_KEY`.
+**API-Schlüssel** trägst du im Fenster ein (Erkennung bzw. KI-Bereinigung) oder mit `fluester key groq gsk_…`. Er liegt in `~/.config/fluester/keys.json`, die Datei ist nur für dich lesbar. Alternativ wirken auch die Umgebungsvariablen `GROQ_API_KEY` und `OPENAI_API_KEY`.
 
 ---
 
 ## Aktualisieren und entfernen
 
-**Aktualisieren:** den Installationsbefehl nochmal ausführen. Ein laufender Dienst wird dabei neu gestartet.
+**Aktualisieren:** im Fenster unter **Über Flüster › Aktualisieren**, oder den Installationsbefehl nochmal ausführen. Ein laufender Dienst wird dabei neu gestartet.
 
 **Entfernen:**
 ```bash
 curl -fsSL https://raw.githubusercontent.com/KimJongUnNK/fluester/main/scripts/install.sh | bash -s -- --uninstall
 ```
-Einstellungen (`~/.config/fluester`), Verlauf und Modelle (`~/.local/share/fluester`) bleiben dabei liegen. Das Skript zeigt den Befehl, um sie ganz zu löschen.
+Der Eintrag im App-Menü verschwindet mit. Einstellungen (`~/.config/fluester`), Verlauf und Modelle (`~/.local/share/fluester`) bleiben dabei liegen. Das Skript zeigt den Befehl, um sie ganz zu löschen.
 
 ---
 
 ## Häufige Probleme
 
-Der erste Schritt ist immer **`fluester status`**. Der Befehl listet erkannte Probleme samt Lösung auf. Jeder Schritt jedes Diktats steht außerdem im Protokoll: `tail -40 ~/.local/share/fluester/fluester.log`. Dort stehen Aufnahme, Erkennung mit Dauer und Einfügen, aber nie der diktierte Text.
+Der erste Schritt ist immer die Seite **Allgemein** im Fenster oder **`fluester status`** im Terminal. Beide listen erkannte Probleme samt Lösung auf. Jeder Schritt jedes Diktats steht außerdem im Protokoll: `tail -40 ~/.local/share/fluester/fluester.log`. Dort stehen Aufnahme, Erkennung mit Dauer und Einfügen, aber nie der diktierte Text.
 
 **Es klappt einmal, danach nicht mehr.**
 Ab Version 1.1.2 fängt Flüster das selbst ab:
@@ -168,9 +195,18 @@ Ab Version 1.1.2 fängt Flüster das selbst ab:
 
 Drückst du die Taste, während das letzte Diktat noch erkannt wird, kommt die Meldung „Moment …“, statt dass nichts passiert. Dauert die Erkennung spürbar lange, nimm ein kleineres Modell (`fluester model download small`).
 
+**Das App-Fenster geht nicht auf.**
+`fluester app --check` sagt, was fehlt. Meist ist es libadwaita: `sudo dnf install libadwaita` (Fedora), `sudo apt install libadwaita-1-0` (Ubuntu/Debian/Mint), `sudo pacman -S libadwaita` (Arch). Flüster selbst läuft auch ohne Fenster; alles geht dann über `fluester setup` und die Befehle oben.
+
+**„Einrichten …“ meldet „Keine Passwortabfrage verfügbar“.**
+Manche schlanken Oberflächen (z. B. Sway ohne Polkit-Agent) haben keine grafische Passwortabfrage. Dann im Terminal: `fluester setup`.
+
+**Das Modell lädt nicht (Firmennetz, Firewall).**
+Flüster lädt von Hugging Face. Einen Spiegel setzt du mit `FLUESTER_MODEL_MIRROR`, z. B. `FLUESTER_MODEL_MIRROR=https://hf-mirror.com/ggerganov/whisper.cpp/resolve/main fluester model download turbo-q5`. Oder du legst die Datei (`ggml-large-v3-turbo-q5_0.bin`) selbst nach `~/.local/share/fluester/models`.
+
 **Die Taste reagiert nicht, oder „Kein Zugriff auf /dev/input/event…“.**
 Flüster liest die Tastatur nur mit der Gruppe `input`. Die wirkt erst in Programmen, die nach dem nächsten Anmelden starten.
-- **Nicht in der Gruppe:** `fluester setup` trägt dich ein. Von Hand geht es mit `sudo usermod -aG input $USER`.
+- **Nicht in der Gruppe:** Im Fenster unter **Berechtigungen › Einrichten …**, oder `fluester setup` trägt dich ein. Von Hand geht es mit `sudo usermod -aG input $USER`.
 - **Fedora Silverblue/Kinoite:** Meldet `usermod` „group 'input' does not exist in /etc/group“, übernimm die Gruppe zuerst mit `grep '^input:' /usr/lib/group | sudo tee -a /etc/group`. Das Setup erledigt das selbst.
 - **Eingetragen, aber noch nicht neu angemeldet:** `fluester stop; fluester start`. Flüster startet dann über `sg input` sofort mit Tastaturzugriff. Nach dem nächsten Anmelden läuft es wieder ganz normal.
 - **Prüfen:** `fluester selftest` zeigt in der Zeile „Gruppe „input““, ob die Gruppe fehlt, eingetragen oder aktiv ist. Mit `fluester run` siehst du alle Meldungen live.
@@ -226,6 +262,7 @@ Du brauchst das [.NET 10 SDK](https://dotnet.microsoft.com/download). Unter Ubun
 git clone https://github.com/KimJongUnNK/fluester.git && cd fluester
 dotnet test dotnet/Fluester.Core.Tests                     # gemeinsame Logik
 dotnet run --project linux/Fluester.Linux -- run           # Dienst im Vordergrund
+dotnet run --project linux/Fluester.Linux -- app           # App-Fenster
 scripts/package-dotnet.sh linux-x64 1.2.3 dist             # Paket wie im Release
 dist/linux-x64/fluester selftest                           # Selbsttest
 ```
@@ -233,6 +270,7 @@ dist/linux-x64/fluester selftest                           # Selbsttest
 **Aufbau:**
 - `dotnet/Fluester.Core` und `dotnet/Fluester.Engine`: Die Logik ist dieselbe wie unter Windows und auf dem Mac.
 - `linux/Fluester.Linux`: Dienst, evdev-Tastatur, uinput-Einfügen, Aufnahme und Mikrofon-Auswahl über `parecord`/`pw-record`/`arecord`, Desktop-Anbindung, Assistent.
+- `linux/Fluester.Linux/Gui`: App-Fenster mit GTK 4 und libadwaita über [Gir.Core](https://gircore.github.io). Es nutzt nur, was es seit libadwaita 1.1 gibt (Ubuntu 22.04), und zeichnet für den Selbsttest jede Seite als Bild (`fluester app --screenshots ordner`).
 
 ## Stand
 
@@ -240,7 +278,9 @@ Die CI prüft jede Version automatisch auf Ubuntu:
 - Diktat-Taste über eine virtuelle Tastatur und `/dev/input`
 - Mikrofon-Auswahl mit virtuellen Mikrofonen (eins mit Ton, eins stumm), Rückfall bei abgestecktem Mikrofon, Wechsel im laufenden Dienst
 - Zwischenablage unter X11
+- Flow-Leiste: jeder Zustand als Bild, echtes Fenster
+- App-Fenster: jede Seite und jeder Einrichtungsschritt wird gezeichnet (CI-Artefakt „App-Fenster-Linux“), App-Menü-Eintrag wird geprüft
 - echte Spracherkennung mit Whisper
-- Installer
+- Installer samt App-Menü-Eintrag
 
-Von Hand auf echten Desktops wurde Version 1.1 noch nicht getestet. Rückmeldungen zu deiner Distribution helfen.
+Das App-Fenster ist in der CI mit GTK 4.14 und libadwaita 1.5 (Ubuntu 24.04) geprüft, hell und dunkel. Rückmeldungen zu deiner Distribution helfen.

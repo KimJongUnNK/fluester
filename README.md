@@ -48,11 +48,11 @@ Lieber von Hand? Alle Dateien liegen unter **[Releases](https://github.com/KimJo
 | --- | --- | --- | --- |
 | Diktat-Taste | **Fn / 🌐** (oder rechte ⌥ ⌘ ⌃) | **Strg rechts** (oder Strg+Win, ⇪, Alt rechts, F8) | **Strg rechts** (oder Strg+Super, ⇪, Alt rechts, F8) |
 | Zusatz für Command Mode | ⌃ | Umschalt | Umschalt |
-| Oberfläche | Menüleiste, Flow-Leiste, Einstellungen | Infobereich, Flow-Leiste, Einstellungen | Flow-Leiste (X11/Xwayland), Hintergrunddienst, Assistent im Terminal |
+| Oberfläche | Menüleiste, Flow-Leiste, Einstellungen | App-Fenster mit Seitenleiste (Startmenü), Infobereich, Flow-Leiste | App-Fenster mit Seitenleiste (GTK 4/libadwaita, App-Menü), Flow-Leiste (X11/Xwayland), Hintergrunddienst |
 | Erkennung offline | Apple SpeechAnalyzer, whisper.cpp | whisper.cpp in der App (Grafikkarte über Vulkan) | whisper.cpp im Dienst (Grafikkarte über Vulkan) |
 | Erkennung Cloud | Groq, OpenAI, eigener Server | Groq, OpenAI, eigener Server | Groq, OpenAI, eigener Server |
 | KI-Bereinigung | Apple Intelligence, Groq/OpenAI/Ollama, Regeln | Groq/OpenAI/Ollama, Regeln | Groq/OpenAI/Ollama, Regeln |
-| Getestet | automatisch in der CI und von Hand auf einem Mac mini | automatisch in der CI (Taste, Einfügen, Erkennung) | automatisch in der CI (Taste, Zwischenablage, Erkennung) |
+| Getestet | automatisch in der CI und von Hand auf einem Mac mini | automatisch in der CI (Taste, Einfügen, Erkennung) | automatisch in der CI (Taste, Zwischenablage, Erkennung, jede Seite des Fensters) |
 
 ## Datenschutz
 
@@ -67,7 +67,7 @@ Mit lokaler Erkennung und lokaler oder regelbasierter Bereinigung verlassen wede
 macos/     Mac-App (Swift, AppKit/SwiftUI) – eigene Logik in macos/Sources/FluesterCore
 dotnet/    gemeinsame Logik für Windows und Linux (C#): Textbereinigung, Engine, Tests
 windows/   Windows-App (WinForms, Tastatur-Hook, WASAPI, SendInput)
-linux/     Linux-Dienst (evdev, uinput, PipeWire/PulseAudio/ALSA)
+linux/     Linux-Dienst (evdev, uinput, PipeWire/PulseAudio/ALSA) und App-Fenster (GTK 4 + libadwaita)
 scripts/   Installer (install.sh für macOS/Linux, install.ps1 für Windows) und Paket-Skripte
 docs/      Anleitungen je System
 ```

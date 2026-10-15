@@ -6,7 +6,8 @@ namespace Fluester.Linux;
 
 /// <summary><c>fluester selftest</c>: prüft Regeln, Speicher, Taste (virtuelle Tastatur → evdev → Taste erkannt),
 /// Zwischenablage und echte Spracherkennung. Umgebung: FLUESTER_SELFTEST_WAV, _EXPECT, _WHISPER (Modell-ID),
-/// FLUESTER_SELFTEST_INPUT=1 (Taste ist Pflicht), FLUESTER_SELFTEST_CLIPBOARD=1 (Zwischenablage ist Pflicht).</summary>
+/// FLUESTER_SELFTEST_INPUT=1 (Taste ist Pflicht), FLUESTER_SELFTEST_CLIPBOARD=1 (Zwischenablage ist Pflicht),
+/// FLUESTER_SELFTEST_OVERLAY=1 (Flow-Leiste ist Pflicht), FLUESTER_SELFTEST_APP=1 (App-Fenster ist Pflicht).</summary>
 static class SelfTest
 {
     static bool ok = true;
@@ -29,6 +30,7 @@ static class SelfTest
             Input(Environment.GetEnvironmentVariable("FLUESTER_SELFTEST_INPUT") == "1");
             Clipboard(Environment.GetEnvironmentVariable("FLUESTER_SELFTEST_CLIPBOARD") == "1");
             FlowBar(Environment.GetEnvironmentVariable("FLUESTER_SELFTEST_OVERLAY") == "1");
+            AppWindow(Environment.GetEnvironmentVariable("FLUESTER_SELFTEST_APP") == "1");
             Log("Werkzeuge: Aufnahme " + (Recorder.Tool ?? "fehlt") + " · Zwischenablage " + Desktop.ClipboardTool);
             Microphones();
             await Speech();
@@ -60,6 +62,30 @@ static class SelfTest
         Check(secrets.Get("selftest") == "geheim", "API-Schlüssel speichern/lesen");
         Check(mode == (UnixFileMode.UserRead | UnixFileMode.UserWrite), $"Schlüsseldatei nur für den Nutzer lesbar ({mode})");
         secrets.Set("selftest", before);
+    }
+
+    /// <summary>App-Fenster in eigenem Prozess öffnen, jede Seite und jeden Einrichtungsschritt zeichnen (PNG in Datenordner/selftest-app).</summary>
+    static void AppWindow(bool required)
+    {
+        Log("App-Fenster (GTK 4 + libadwaita):");
+        if (!Gui.Integration.CanShowWindow(out var why)) { Check(false, why, required); return; }
+        var dir = Path.Combine(Paths.Data, "selftest-app");
+        if (Directory.Exists(dir)) Directory.Delete(dir, true);
+        var psi = new ProcessStartInfo(Environment.ProcessPath!) { RedirectStandardOutput = true, RedirectStandardError = true, UseShellExecute = false };
+        foreach (var a in new[] { "app", "--screenshots", dir }) psi.ArgumentList.Add(a);
+        // Ohne Grafikkarte (Xvfb, CI) zeichnet cairo am verlässlichsten
+        if (Environment.GetEnvironmentVariable("GSK_RENDERER") is null) psi.Environment["GSK_RENDERER"] = "cairo";
+        using var p = Process.Start(psi)!;
+        var output = p.StandardOutput.ReadToEndAsync();
+        var errors = p.StandardError.ReadToEndAsync();
+        bool exited = p.WaitForExit(120_000);
+        if (!exited) try { p.Kill(true); } catch { }
+        var text = exited ? output.Result.Trim() : "";
+        if (text.Split('\n').FirstOrDefault(l => l.StartsWith("GTK")) is { } versions) Log("  " + versions);
+        int pngs = Directory.Exists(dir) ? Directory.GetFiles(dir, "*.png").Length : 0;
+        bool good = exited && p.ExitCode == 0 && pngs == Gui.MainWindow.All.Length + 6;
+        Check(good, $"alle Seiten und Einrichtungsschritte gezeichnet ({pngs} Bilder in {dir})", required);
+        if (!good) Log("    " + (exited ? (text + "\n" + errors.Result).Trim().Split('\n').LastOrDefault() : "hängt – nach 120 s abgebrochen"));
     }
 
     static void Input(bool required)

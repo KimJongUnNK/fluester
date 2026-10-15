@@ -7,8 +7,9 @@ namespace Fluester.Linux;
 /// <summary>Einrichtung im Terminal: Rechte (Gruppe input, /dev/uinput), Werkzeuge, Mikrofon, Taste, Erkennung, Modell, Autostart.</summary>
 static class Setup
 {
-    const string UdevRule = "/etc/udev/rules.d/80-fluester-uinput.rules";
-    const string ModulesConf = "/etc/modules-load.d/fluester-uinput.conf";
+    public const string UdevRule = "/etc/udev/rules.d/80-fluester-uinput.rules";
+    public const string ModulesConf = "/etc/modules-load.d/fluester-uinput.conf";
+    const string UdevRuleText = "# Flüster: virtuelle Tastatur für Strg+V\nKERNEL==\"uinput\", SUBSYSTEM==\"misc\", GROUP=\"input\", MODE=\"0660\", OPTIONS+=\"static_node=uinput\"\n";
 
     static bool yes;
 
@@ -66,7 +67,7 @@ static class Setup
     {
         var tmp = Path.GetTempFileName();
         File.WriteAllText(tmp, content);
-        bool ok = Sudo("install", "-m", "644", tmp, file);
+        bool ok = Sudo("install", "-D", "-m", "644", tmp, file);
         File.Delete(tmp);
         return ok;
     }
@@ -84,16 +85,16 @@ static class Setup
         Sudo("sh", "-c", $"grep -q '^{group}:' /etc/group || grep '^{group}:' /usr/lib/group >> /etc/group");
     }
 
-    static bool CanWrite(string path)
+    public static bool CanWrite(string path)
     {
         try { using var f = new FileStream(path, FileMode.Open, FileAccess.Write); return true; }
         catch { return false; }
     }
 
-    static string? PackageManager => Desktop.Which("apt-get") != null ? "apt" : Desktop.Which("dnf") != null ? "dnf"
+    public static string? PackageManager => Desktop.Which("apt-get") != null ? "apt" : Desktop.Which("dnf") != null ? "dnf"
         : Desktop.Which("pacman") != null ? "pacman" : Desktop.Which("zypper") != null ? "zypper" : null;
 
-    static string[] InstallCommand(IEnumerable<string> pkgs) => PackageManager switch
+    public static string[] InstallCommand(IEnumerable<string> pkgs) => PackageManager switch
     {
         "apt" => new[] { "apt-get", "install", "-y" }.Concat(pkgs).ToArray(),
         "dnf" => new[] { "dnf", "install", "-y" }.Concat(pkgs).ToArray(),
@@ -113,8 +114,59 @@ static class Setup
         (_, "wayland-clip") => "wl-clipboard",
         (_, "x-clip") => "xclip",
         (_, "xdotool") => "xdotool",
+        ("apt", "gui") or ("zypper", "gui") => "libadwaita-1-0",
+        (_, "gui") => "libadwaita",
         _ => what,
     };
+
+    /// <summary>/dev/uinput ist für Flüster beschreibbar.</summary>
+    public static bool UinputOk => File.Exists("/dev/uinput") && CanWrite("/dev/uinput");
+
+    /// <summary>Was an Rechten fehlt: Gruppe „input“ eintragen, /dev/uinput freigeben.
+    /// Regel schon da und nur die Gruppe noch nicht aktiv → /dev/uinput passt nach dem Neuanmelden von selbst.</summary>
+    public static (bool AddGroup, bool FixUinput) MissingRights()
+    {
+        bool registered = InputAccess.Active || InputAccess.Registered;
+        bool fixUinput = !UinputOk && !(File.Exists(UdevRule) && registered && !InputAccess.Active);
+        return (!registered, fixUinput);
+    }
+
+    /// <summary>Rechte als ein Shell-Skript für pkexec (App-Fenster). Gleiche Schritte wie im Terminal-Setup.</summary>
+    public static string RightsScript(bool addGroup, bool fixUinput, string user)
+    {
+        if (!System.Text.RegularExpressions.Regex.IsMatch(user, "^[A-Za-z0-9._][A-Za-z0-9._-]*\\$?$")) throw new FluesterException("Ungewöhnlicher Benutzername: " + user);
+        var sb = new System.Text.StringBuilder("set -e\n");
+        if (addGroup)
+        {
+            // Fedora Atomic: Gruppe steht nur in /usr/lib/group
+            sb.Append("grep -q '^input:' /etc/group || { grep '^input:' /usr/lib/group >> /etc/group 2>/dev/null || groupadd -r input; }\n");
+            sb.Append($"usermod -aG input '{user}'\n");
+        }
+        if (fixUinput)
+        {
+            sb.Append($"mkdir -p {Path.GetDirectoryName(UdevRule)} {Path.GetDirectoryName(ModulesConf)}\n");
+            sb.Append($"printf '%s' '{UdevRuleText.Replace("'", "'\\''")}' > {UdevRule}\n");
+            sb.Append($"echo uinput > {ModulesConf}\n");
+            sb.Append("modprobe uinput || true\n");
+            sb.Append("udevadm control --reload-rules || true\n");
+            sb.Append("udevadm trigger --name-match=uinput || true\n");
+        }
+        return sb.ToString();
+    }
+
+    public sealed record Tool(string Title, string? Found, string Package, bool Required);
+
+    /// <summary>Werkzeuge, die Flüster nutzt – mit Paketnamen, falls sie fehlen.</summary>
+    public static List<Tool> Tools()
+    {
+        var list = new List<Tool> { new("Aufnahme", Recorder.Tool, Pkg("pulse"), true) };
+        if (Desktop.Wayland) list.Add(new("Zwischenablage", Desktop.Which("wl-copy") != null ? "wl-clipboard" : null, Pkg("wayland-clip"), true));
+        else list.Add(new("Zwischenablage", Desktop.ClipboardAvailable ? Desktop.ClipboardTool : null, Pkg("x-clip"), true));
+        if (!Desktop.Wayland) list.Add(new("Aktives Fenster (Stil je App)", Desktop.Which("xdotool") != null ? "xdotool" : null, Pkg("xdotool"), false));
+        list.Add(new("Benachrichtigungen", Desktop.Which("notify-send") != null ? "notify-send" : null, Pkg("notify"), false));
+        list.Add(new("App-Fenster", Gui.Integration.LibrariesAvailable(out _) ? "GTK 4 + libadwaita" : null, Pkg("gui"), false));
+        return list;
+    }
 
     public static int Run(string[] args)
     {
@@ -129,10 +181,9 @@ static class Setup
         bool active = InputAccess.Active;                       // wirkt in dieser Anmeldung
         bool registered = active || InputAccess.Registered;     // eingetragen, wirkt spätestens nach dem Neuanmelden
         bool needRelogin = !active && registered;
-        bool uinputOk = File.Exists("/dev/uinput") && CanWrite("/dev/uinput");
+        bool uinputOk = UinputOk;
         bool canRead = KeyboardWatcher.Keyboards().Any(k => { try { using var f = File.OpenRead(k.Path); return true; } catch { return false; } });
-        // Regel schon da und nur die Gruppe noch nicht aktiv → /dev/uinput passt nach dem Neuanmelden von selbst
-        bool fixUinput = !uinputOk && !(File.Exists(UdevRule) && registered && !active);
+        bool fixUinput = MissingRights().FixUinput;
         if (active && uinputOk && canRead) Good("Gruppe „input“ und /dev/uinput passen");
         else
         {
@@ -156,7 +207,7 @@ static class Setup
                     }
                     if (fixUinput)
                     {
-                        ok &= SudoWrite(UdevRule, "# Flüster: virtuelle Tastatur für Strg+V\nKERNEL==\"uinput\", SUBSYSTEM==\"misc\", GROUP=\"input\", MODE=\"0660\", OPTIONS+=\"static_node=uinput\"\n");
+                        ok &= SudoWrite(UdevRule, UdevRuleText);
                         ok &= SudoWrite(ModulesConf, "uinput\n");
                         Sudo("modprobe", "uinput");
                         Sudo("udevadm", "control", "--reload-rules");
@@ -171,11 +222,13 @@ static class Setup
         // 2) Werkzeuge
         Title("2  Werkzeuge");
         var missing = new List<string>();
-        if (Recorder.Tool is { } rec) Good("Aufnahme: " + rec); else { Bad("Aufnahme-Werkzeug fehlt"); missing.Add(Pkg("pulse")); }
-        if (Desktop.Wayland) { if (Desktop.Which("wl-copy") != null) Good("Zwischenablage: wl-clipboard"); else { Bad("wl-clipboard fehlt"); missing.Add(Pkg("wayland-clip")); } }
-        else { if (Desktop.Which("xclip") != null || Desktop.Which("xsel") != null) Good("Zwischenablage: " + Desktop.ClipboardTool); else { Bad("xclip fehlt"); missing.Add(Pkg("x-clip")); } }
-        if (!Desktop.Wayland) { if (Desktop.Which("xdotool") != null) Good("Aktives Fenster: xdotool"); else { Info("Optional: xdotool (Stil je App, Terminal-Erkennung)"); missing.Add(Pkg("xdotool")); } }
-        if (Desktop.Which("notify-send") != null) Good("Benachrichtigungen: notify-send"); else { Info("Optional: notify-send (Rückmeldung am Bildschirm)"); missing.Add(Pkg("notify")); }
+        foreach (var t in Tools())
+        {
+            if (t.Found != null) Good($"{t.Title}: {t.Found}");
+            else if (t.Required) Bad($"{t.Title}: fehlt ({t.Package})");
+            else Info($"Optional – {t.Title}: {t.Package}");
+            if (t.Found == null) missing.Add(t.Package);
+        }
         if (missing.Count > 0 && PackageManager != null)
         {
             Info("Installieren: sudo " + string.Join(' ', InstallCommand(missing)));
@@ -247,9 +300,11 @@ static class Setup
             Good("~/.config/autostart/fluester.desktop angelegt");
         }
         store.Update(s => s.OnboardingDone = true);
+        try { Gui.Integration.Install(); } catch (Exception e) { Log.Write("App-Menü-Eintrag: " + e.Message); }
 
         Title("Fertig");
         Info($"Diktieren: in ein Textfeld klicken, {store.Current.Hotkey.Label(linux: true)} halten, sprechen, loslassen.");
+        if (Gui.Integration.LibrariesAvailable(out _)) Info("Einstellungen, Verlauf und Wörterbuch: „Flüster“ im App-Menü (oder fluester app)");
         Info("Befehle: fluester status · fluester mic · fluester toggle · fluester config · fluester help");
         if (needRelogin)
         {
@@ -280,11 +335,15 @@ static class Setup
         return 0;
     }
 
+    public static string AutostartFile => Path.Combine(Environment.GetEnvironmentVariable("XDG_CONFIG_HOME") is { Length: > 0 } x ? x
+        : Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".config"), "autostart", "fluester.desktop");
+
+    public static bool AutostartEnabled => File.Exists(AutostartFile);
+
     public static void Autostart(bool on)
     {
-        var dir = Path.Combine(Environment.GetEnvironmentVariable("XDG_CONFIG_HOME") is { Length: > 0 } x ? x
-            : Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".config"), "autostart");
-        var file = Path.Combine(dir, "fluester.desktop");
+        var file = AutostartFile;
+        var dir = Path.GetDirectoryName(file)!;
         if (!on) { if (File.Exists(file)) File.Delete(file); return; }
         Directory.CreateDirectory(dir);
         File.WriteAllText(file, $"""
@@ -293,24 +352,12 @@ static class Setup
             Name=Flüster
             Comment=Diktieren in jeder App
             Exec={Environment.ProcessPath} start
-            Icon=audio-input-microphone
+            Icon={Gui.Integration.AppId}
             Terminal=false
             X-GNOME-Autostart-enabled=true
             NoDisplay=true
             """);
-        // Eintrag im App-Menü: freihändig an/aus (lässt sich auch als Tastenkürzel im Desktop belegen)
-        var apps = Path.Combine(Environment.GetEnvironmentVariable("XDG_DATA_HOME") is { Length: > 0 } d ? d
-            : Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".local", "share"), "applications");
-        Directory.CreateDirectory(apps);
-        File.WriteAllText(Path.Combine(apps, "fluester-toggle.desktop"), $"""
-            [Desktop Entry]
-            Type=Application
-            Name=Flüster: Diktat an/aus
-            Comment=Freihändig diktieren starten oder beenden
-            Exec={Environment.ProcessPath} toggle
-            Icon=audio-input-microphone
-            Terminal=false
-            Categories=Utility;Accessibility;
-            """);
+        // App-Menü: „Flüster“ (Fenster) mit Aktion „Diktat an/aus“
+        try { Gui.Integration.Install(); } catch (Exception e) { Log.Write("App-Menü-Eintrag: " + e.Message); }
     }
 }

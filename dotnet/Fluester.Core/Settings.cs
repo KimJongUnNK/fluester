@@ -83,7 +83,10 @@ public sealed class ApiConfig
 /// <summary>Lokales Whisper-Modell (ggml-Format von whisper.cpp).</summary>
 public sealed record WhisperModel(string Id, string Name, string File, int SizeMB, string Note)
 {
-    public Uri Url => new($"https://huggingface.co/ggerganov/whisper.cpp/resolve/main/{File}");
+    public const string DefaultSource = "https://huggingface.co/ggerganov/whisper.cpp/resolve/main";
+
+    /// <summary>Download-Adresse. FLUESTER_MODEL_MIRROR ersetzt Hugging Face (Spiegel hinter Firmen-Firewalls, z. B. https://hf-mirror.com/ggerganov/whisper.cpp/resolve/main; Tests).</summary>
+    public Uri Url => new($"{(Environment.GetEnvironmentVariable("FLUESTER_MODEL_MIRROR") is { Length: > 0 } m ? m.TrimEnd('/') : DefaultSource)}/{File}");
 
     public static readonly WhisperModel[] All =
     {

@@ -3,6 +3,7 @@ using System.Diagnostics;
 using System.Net.Sockets;
 using System.Runtime.InteropServices;
 using System.Text;
+using System.Text.Json;
 using Fluester.Core;
 using Fluester.Engine;
 
@@ -215,6 +216,8 @@ sealed class Daemon : IDisposable
         var model = WhisperModel.ById(s.WhisperModelId);
         if (s.Engine != EngineChoice.WhisperLocal) return;
         if (!ModelStore.IsInstalled(model)) { Problem($"Whisper-Modell „{model.Name}“ fehlt – fluester model download {model.Id}"); return; }
+        // Inzwischen geladen (z. B. über das App-Fenster): alte Meldung weg
+        problems.RemoveWhere(p => p.StartsWith("Whisper-Modell"));
         var engine = new WhisperLocalEngine(model, s.UseGpu);
         Task.Run(async () =>
         {
@@ -515,6 +518,23 @@ sealed class Daemon : IDisposable
             case "stop":
                 queue.CompleteAdding();
                 return "beendet";
+            case "status-json":
+                // Für das App-Fenster: derselbe Stand wie „status“, maschinenlesbar
+                var cur = store.Current;
+                return JsonSerializer.Serialize(new DaemonStatus
+                {
+                    State = state switch { State.Recording => "recording", State.Processing => "processing", _ => "idle" },
+                    BusySeconds = state == State.Processing ? Math.Round(clock.Elapsed.TotalSeconds - processingSince, 1) : 0,
+                    Pid = Environment.ProcessId,
+                    Version = typeof(Daemon).Assembly.GetName().Version?.ToString(3) ?? "dev",
+                    Hotkey = cur.Hotkey.Label(linux: true),
+                    Microphone = MicDescription(cur.MicrophoneId),
+                    Bar = bar is { Alive: false } ? "Verbindung zur Anzeige verloren – Flüster neu starten" : barInfo,
+                    BarOk = BarOk,
+                    Backend = WhisperLocalEngine.Backend,
+                    KeyboardOk = keyboardProblem == null,
+                    Problems = problems.ToArray(),
+                }, DaemonStatus.Json);
             default:
                 var s = store.Current;
                 var engine = s.Engine == EngineChoice.WhisperLocal
@@ -530,10 +550,21 @@ sealed class Daemon : IDisposable
         }
     }
 
+    (string Id, string Text, DateTime At)? micCache;
+
+    /// <summary>Name des Mikrofons, höchstens alle 5 s neu ermittelt – das App-Fenster fragt den Stand laufend ab.</summary>
+    string MicDescription(string id)
+    {
+        if (micCache is { } c && c.Id == id && (DateTime.UtcNow - c.At).TotalSeconds < 5) return c.Text;
+        var text = Recorder.Describe(id);
+        micCache = (id, text, DateTime.UtcNow);
+        return text;
+    }
+
     public static bool IsRunning() => Send("ping") != null;
 
-    /// <summary>Befehl an den laufenden Dienst; null = läuft nicht.</summary>
-    public static string? Send(string cmd)
+    /// <summary>Befehl an den laufenden Dienst; null = läuft nicht. Liest bis der Dienst die Verbindung schließt.</summary>
+    public static string? Send(string cmd, int timeoutMs = 4000)
     {
         if (!File.Exists(SocketPath)) return null;
         try
@@ -541,15 +572,26 @@ sealed class Daemon : IDisposable
             using var s = new Socket(AddressFamily.Unix, SocketType.Stream, ProtocolType.Unspecified);
             s.Connect(new UnixDomainSocketEndPoint(SocketPath));
             s.Send(Encoding.UTF8.GetBytes(cmd));
-            s.ReceiveTimeout = 4000;
+            s.ReceiveTimeout = timeoutMs;
+            using var all = new MemoryStream();
             var buf = new byte[4096];
-            int n = s.Receive(buf);
-            return Encoding.UTF8.GetString(buf, 0, n).Trim();
+            int n;
+            while ((n = s.Receive(buf)) > 0) all.Write(buf, 0, n);
+            return all.Length == 0 ? null : Encoding.UTF8.GetString(all.ToArray()).Trim();
         }
         catch
         {
             return null;
         }
+    }
+
+    /// <summary>Stand des Dienstes für das App-Fenster; null = läuft nicht.</summary>
+    public static DaemonStatus? Status(int timeoutMs = 2500)
+    {
+        var json = Send("status-json", timeoutMs);
+        if (json == null || !json.StartsWith('{')) return null;
+        try { return JsonSerializer.Deserialize<DaemonStatus>(json, DaemonStatus.Json); }
+        catch (JsonException) { return null; }
     }
 
     public void Dispose()
@@ -562,4 +604,30 @@ sealed class Daemon : IDisposable
         server?.Dispose();
         try { File.Delete(SocketPath); } catch { }
     }
+}
+
+/// <summary>Antwort auf „status-json“.</summary>
+sealed class DaemonStatus
+{
+    public static readonly JsonSerializerOptions Json = new() { PropertyNamingPolicy = JsonNamingPolicy.CamelCase };
+
+    /// <summary>idle | recording | processing</summary>
+    public string State { get; set; } = "idle";
+    public double BusySeconds { get; set; }
+    public int Pid { get; set; }
+    public string Version { get; set; } = "";
+    public string Hotkey { get; set; } = "";
+    public string Microphone { get; set; } = "";
+    public string Bar { get; set; } = "";
+    public bool BarOk { get; set; }
+    public string? Backend { get; set; }
+    public bool KeyboardOk { get; set; }
+    public string[] Problems { get; set; } = Array.Empty<string>();
+
+    public string StateLabel => State switch
+    {
+        "recording" => "hört zu",
+        "processing" => $"erkennt ({BusySeconds:0} s)",
+        _ => "bereit",
+    };
 }

@@ -43,22 +43,22 @@ jobs:
           scripts/package-dotnet.sh linux-arm64 "${{ inputs.version || format('0.0.{0}', github.run_number) }}" dist
           file dist/linux-arm64/fluester
 
-      - name: Testumgebung (uinput, Xvfb, Zwischenablage, Sprache, Modell)
+      - name: Testumgebung (uinput, Xvfb, Zwischenablage, Sprache, Modell, GTK 4 + libadwaita)
         run: |
           sudo apt-get update -qq
-          sudo apt-get install -y -qq xvfb xauth xclip xdotool espeak-ng
+          sudo apt-get install -y -qq xvfb xauth xclip xdotool espeak-ng libgtk-4-1 libadwaita-1-0 desktop-file-utils
           sudo modprobe uinput
           ls -la /dev/uinput
           mkdir -p "$RUNNER_TEMP/fhome/models"
           curl -sSL --retry 3 -o "$RUNNER_TEMP/fhome/models/ggml-base.bin" "$BASE_MODEL"
           curl -sSL --retry 3 -o "$RUNNER_TEMP/jfk.wav" "$SAMPLE_WAV"
 
-      - name: Selbsttest (Taste über uinput/evdev, Zwischenablage, echte Spracherkennung)
+      - name: Selbsttest (Taste über uinput/evdev, Zwischenablage, Flow-Leiste, App-Fenster, echte Spracherkennung)
         timeout-minutes: 10
         run: |
           sudo -E env "PATH=$PATH" \
             FLUESTER_HOME="$RUNNER_TEMP/fhome" \
-            FLUESTER_SELFTEST_INPUT=1 FLUESTER_SELFTEST_CLIPBOARD=1 FLUESTER_SELFTEST_OVERLAY=1 \
+            FLUESTER_SELFTEST_INPUT=1 FLUESTER_SELFTEST_CLIPBOARD=1 FLUESTER_SELFTEST_OVERLAY=1 FLUESTER_SELFTEST_APP=1 \
             FLUESTER_SELFTEST_WHISPER=base FLUESTER_SELFTEST_WAV="$RUNNER_TEMP/jfk.wav" FLUESTER_SELFTEST_EXPECT=country \
             xvfb-run -a dist/linux-x64/fluester selftest
 
@@ -69,6 +69,23 @@ jobs:
           path: ${{ runner.temp }}/fhome/selftest-leiste-*.png
           if-no-files-found: error
           retention-days: 14
+
+      - name: Bilder des App-Fensters
+        uses: actions/upload-artifact@v4
+        with:
+          name: App-Fenster-Linux
+          path: ${{ runner.temp }}/fhome/selftest-app/*.png
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: App-Menü-Eintrag (fluester integrate)
+        run: |
+          export XDG_DATA_HOME="$RUNNER_TEMP/xdg-data"
+          dist/linux-x64/fluester integrate
+          desktop-file-validate "$XDG_DATA_HOME/applications/io.github.kimjongunnk.Fluester.desktop"
+          grep -q "^Exec=$PWD/dist/linux-x64/fluester app" "$XDG_DATA_HOME/applications/io.github.kimjongunnk.Fluester.desktop"
+          test -s "$XDG_DATA_HOME/icons/hicolor/scalable/apps/io.github.kimjongunnk.Fluester.svg"
+          xvfb-run -a dist/linux-x64/fluester app --check
 
       - name: Mikrofon-Auswahl (virtuelle Mikrofone über PulseAudio)
         run: |
@@ -195,8 +212,11 @@ jobs:
           FLUESTER_TARBALL=dist/Fluester-Linux-x64.tar.gz FLUESTER_NO_SETUP=1 bash scripts/install.sh
           ~/.local/bin/fluester version
           ~/.local/bin/fluester help | head -3
+          test -f ~/.local/share/applications/io.github.kimjongunnk.Fluester.desktop
+          test -f ~/.local/share/icons/hicolor/scalable/apps/io.github.kimjongunnk.Fluester.svg
           bash scripts/install.sh --uninstall
           test ! -e ~/.local/bin/fluester
+          test ! -e ~/.local/share/applications/io.github.kimjongunnk.Fluester.desktop
 
       - uses: actions/upload-artifact@v4
         with:
