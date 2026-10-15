@@ -33,6 +33,10 @@ static class DesktopApp
             try { Integration.Install(); } catch (Exception e) { Log.Write("App-Menü-Eintrag: " + e.Message); }
 
         Adw.Module.Initialize();
+        // Wayland-App-ID und X11-WM_CLASS = Name der .desktop-Datei – nur so zeigen GNOME/KDE das richtige Symbol im Dock
+        // (ohne Sitzungsbus fiele GTK sonst auf den Programmnamen „fluester“ zurück)
+        GLib.Functions.SetPrgname(Integration.AppId);
+        GLib.Functions.SetApplicationName("Flüster");
         // Ohne Sitzungsbus (z. B. CI) kann sich die App nicht als einzige Instanz anmelden – dann eben ohne
         bool bus = Environment.GetEnvironmentVariable("DBUS_SESSION_BUS_ADDRESS") is { Length: > 0 }
             || File.Exists(Path.Combine(Environment.GetEnvironmentVariable("XDG_RUNTIME_DIR") ?? "/nonexistent", "bus"));
