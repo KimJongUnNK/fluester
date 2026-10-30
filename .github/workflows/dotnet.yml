@@ -115,9 +115,16 @@ jobs:
           echo "::endgroup::"
 
           echo "::group::Abgestecktes Mikrofon → Systemstandard"
-          python3 -c "import json,os; p=os.environ['FLUESTER_HOME']+'/settings.json'; d=json.load(open(p)); d['microphoneId']='abgesteckt'; json.dump(d,open(p,'w'))"
+          python3 -c "import json,os; p=os.environ['FLUESTER_HOME']+'/settings.json'; d=json.load(open(p)); d['microphoneId']='abgesteckt'; d['microphoneName']='Abgestecktes USB-Mikro'; json.dump(d,open(p,'w'))"
           $f mic test --seconds 1 | tee fallback.txt
           grep -q "nicht angeschlossen" fallback.txt
+          echo "::endgroup::"
+
+          echo "::group::Umgestecktes Mikrofon (neue Id, gleicher Name) wird wiedererkannt"
+          python3 -c "import json,os; p=os.environ['FLUESTER_HOME']+'/settings.json'; d=json.load(open(p)); d['microphoneId']='alsa_input.usb-alter-port-00.analog-stereo'; d['microphoneName']='Sinus-Mikrofon'; json.dump(d,open(p,'w'))"
+          $f mic test --seconds 1 | tee moved.txt
+          grep -q "wiedergefunden" moved.txt
+          grep -q "Pegel von Sinus-Mikrofon" moved.txt
           echo "::endgroup::"
 
           echo "::group::Laufender Dienst übernimmt die Wahl sofort"

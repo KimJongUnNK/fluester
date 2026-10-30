@@ -106,8 +106,9 @@ static class Mic
     /// <summary>Nimmt ein paar Sekunden auf und zeigt den Pegel live. true = es kommt hörbar Ton an.</summary>
     public static bool LevelTest(string configured, double seconds, string configuredName = "")
     {
-        var id = Recorder.Resolve(configured, configuredName, out bool missing, out _);
-        if (missing) Console.WriteLine($"  ! „{configured}“ ist nicht angeschlossen – teste den Systemstandard.");
+        var id = Recorder.Resolve(configured, configuredName, out bool missing, out var moved);
+        if (missing) Console.WriteLine($"  ! „{(configuredName.Length > 0 ? configuredName : configured)}“ ist nicht angeschlossen – teste den Systemstandard.");
+        if (moved != null) Console.WriteLine($"  ✓ „{moved.Name}“ unter neuer Id wiedergefunden (anderer USB-Port, Hub oder Profil).");
         bool live = !Console.IsOutputRedirected;
         Console.WriteLine($"Pegel von {Recorder.Describe(id)} – sprich ein paar Worte …");
         using var rec = new Recorder();
