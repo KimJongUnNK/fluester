@@ -1,4 +1,5 @@
 using System.Text.Json;
+using System.Text.RegularExpressions;
 
 namespace Fluester.Engine;
 
@@ -96,6 +97,47 @@ public static class MicrophoneParser
         }
         Flush();
         return list;
+    }
+
+    /// <summary>Gewähltes Mikrofon wiederfinden, auch wenn sich seine Id geändert hat. USB-Mikrofone ohne Seriennummer
+    /// bekommen ihre Id vom Anschluss: anderer Port oder Hub → neue Id (Windows schreibt dann „2- “ vor den Namen,
+    /// PipeWire einen anderen Pfad oder ein anderes Profil). Reihenfolge: genaue Id, Id ohne Profil, gleicher Name.
+    /// Passen zwei, gilt keins – lieber der Systemstandard als das falsche von zwei gleichen Mikrofonen.</summary>
+    public static Microphone? Find(IReadOnlyList<Microphone> mics, string id, string name)
+    {
+        if (id.Length == 0) return null;
+        if (mics.FirstOrDefault(m => m.Id == id) is { } exact) return exact;
+        var stable = StableId(id);
+        if (stable != id && Only(mics.Where(m => StableId(m.Id) == stable)) is { } sameDevice) return sameDevice;
+        var wanted = NormalizeName(name);
+        return wanted.Length > 0 ? Only(mics.Where(m => NormalizeName(m.Name) == wanted)) : null;
+    }
+
+    static Microphone? Only(IEnumerable<Microphone> hits)
+    {
+        var two = hits.Take(2).ToList();
+        return two.Count == 1 ? two[0] : null;
+    }
+
+    /// <summary>Id ohne das PipeWire/PulseAudio-Profil, das bei gleichem Gerät wechseln kann
+    /// (<c>alsa_input.usb-RODE_NT-USB-00.analog-stereo</c> ↔ <c>….mono-fallback</c>).</summary>
+    public static string StableId(string id)
+    {
+        if (!id.StartsWith("alsa_input.")) return id;
+        int dot = id.LastIndexOf('.');
+        return dot > "alsa_input.".Length ? id[..dot] : id;
+    }
+
+    static readonly Regex WindowsNumber = new(@"(?<=^|\()\s*\d+-\s*");
+    static readonly Regex PipeWireProfile = new(@"\s+(?:(?:Analog|Digital)(?:\s+(?:Stereo|Mono|Surround\s+\S+))?|Mono)$", RegexOptions.IgnoreCase);
+    static readonly Regex Spaces = new(@"\s+");
+
+    /// <summary>Name zum Vergleichen: ohne Groß-/Kleinschreibung, ohne Windows-Nummer („Mikrofon (2- Yeti)“ → „mikrofon (yeti)“),
+    /// ohne PipeWire-Profil („Yeti Analog Stereo“ → „yeti“).</summary>
+    public static string NormalizeName(string name)
+    {
+        var n = PipeWireProfile.Replace(WindowsNumber.Replace(name.Trim(), ""), "");
+        return Spaces.Replace(n, " ").Trim().ToLowerInvariant();
     }
 
     /// <summary>Mikrofone zur Eingabe: Nummer (1-basiert), genaue Id oder Teil von Name/Id (ohne Groß-/Kleinschreibung).</summary>

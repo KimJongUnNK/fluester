@@ -7,7 +7,7 @@ sealed class MicPicker
 {
     public readonly Adw.ComboRow Row = Adw.ComboRow.New();
     readonly SettingsStore store;
-    List<(string Id, string Label, bool Muted)> items = new();
+    List<(string Id, string Name, string Label, bool Muted)> items = new();
     bool loading = true;
 
     /// <summary>Neue Wahl (Id, "" = Systemstandard) und ob das Gerät stummgeschaltet ist.</summary>
@@ -24,9 +24,9 @@ sealed class MicPicker
         GObject.Object.NotifySignal.Connect(Row, (_, _) => Ui.Safe(() =>
         {
             if (loading || Row.Selected >= items.Count) return;
-            var (id, _, muted) = items[(int)Row.Selected];
+            var (id, name, _, muted) = items[(int)Row.Selected];
             if (id == store.Current.MicrophoneId) return;
-            store.Update(s => s.MicrophoneId = id);
+            store.Update(s => { s.MicrophoneId = id; s.MicrophoneName = name; });
             Changed?.Invoke(id, muted);
         }), false, "selected");
         Ui.Run(Load);
@@ -38,11 +38,17 @@ sealed class MicPicker
     async Task Load()
     {
         var mics = await Task.Run(Recorder.Devices);
-        var current = store.Current.MicrophoneId;
+        var s = store.Current;
+        // Unter neuer Id (anderer USB-Port/Hub, anderes Profil) gleich wiederfinden und merken – sonst „nicht angeschlossen“
+        var chosen = MicrophoneParser.Find(mics, s.MicrophoneId, s.MicrophoneName);
+        if (chosen != null && (chosen.Id != s.MicrophoneId || chosen.Name != s.MicrophoneName))
+            store.Update(x => { x.MicrophoneId = chosen.Id; x.MicrophoneName = chosen.Name; });
+        var current = chosen?.Id ?? s.MicrophoneId;
         var def = mics.FirstOrDefault(m => m.IsDefault);
-        items = new() { ("", def != null ? $"Systemstandard ({def.Name})" : "Systemstandard", def?.Muted ?? false) };
-        items.AddRange(mics.Select(m => (m.Id, m.Name + (m.Muted ? " · stumm" : ""), m.Muted)));
-        if (current.Length > 0 && items.All(i => i.Id != current)) items.Add((current, current + " – nicht angeschlossen", false));
+        items = new() { ("", "", def != null ? $"Systemstandard ({def.Name})" : "Systemstandard", def?.Muted ?? false) };
+        items.AddRange(mics.Select(m => (m.Id, m.Name, m.Name + (m.Muted ? " · stumm" : ""), m.Muted)));
+        if (current.Length > 0 && chosen == null)
+            items.Add((current, s.MicrophoneName, (s.MicrophoneName.Length > 0 ? s.MicrophoneName : current) + " – nicht angeschlossen", false));
         loading = true;
         Row.Model = Gtk.StringList.New(items.Select(i => i.Label).ToArray());
         Row.Selected = (uint)Math.Max(0, items.FindIndex(i => i.Id == current));
@@ -79,10 +85,10 @@ sealed class LevelMeter : IDisposable
     }
 
     /// <summary>Startet die Aufnahme. <paramref name="seconds"/> = 0: läuft bis <see cref="Stop"/>. Am Ende: Spitze und Fehler.</summary>
-    public void Start(string configuredMic, double seconds = 0, Action<float, string?>? finished = null)
+    public void Start(string configuredMic, string configuredName, double seconds = 0, Action<float, string?>? finished = null)
     {
         Stop();
-        var id = Recorder.Resolve(configuredMic, out _);
+        var id = Recorder.Resolve(configuredMic, configuredName, out _, out _);
         var r = new Recorder();
         now = 0;
         peak = 0;

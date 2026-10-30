@@ -162,7 +162,7 @@ sealed class Onboarding
             // Mikrofone kommen verzögert – ist der Schritt schon verlassen, nicht mehr aufnehmen
             if (!main.Live || steps[index].Name != "Mikrofon") return;
             heard = false;
-            meter.Start(main.Store.Current.MicrophoneId);
+            meter.Start(main.Store.Current.MicrophoneId, main.Store.Current.MicrophoneName);
             Ui.Every(300, () =>
             {
                 if (!meter.Running) return false;

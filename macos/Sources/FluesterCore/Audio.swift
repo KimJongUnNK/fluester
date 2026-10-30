@@ -28,6 +28,25 @@ public enum AudioUtil {
         return data
     }
 
+    /// Mehrkanal → mono. Gemittelt werden nur Kanäle, auf denen etwas ankommt (bis 10 dB unter dem lautesten): Bei
+    /// Audio-Interfaces und manchen USB-Mikros steckt die Stimme nur auf einem Kanal – der Mittelwert über alle würde sie
+    /// halbieren, „nur Kanal 1“ wäre bei einem Mikro an Eingang 2 stumm.
+    public static func downmix(_ channels: [[Float]]) -> [Float] {
+        guard channels.count > 1 else { return channels.first ?? [] }
+        let frames = channels.map(\.count).min() ?? 0
+        let energy = channels.map { ch in (0..<frames).reduce(Float(0)) { $0 + ch[$1] * ch[$1] } }
+        let loudest = energy.max() ?? 0
+        var mono = [Float](repeating: 0, count: frames)
+        guard loudest > 0 else { return mono }
+        let active = channels.indices.filter { energy[$0] >= loudest * 0.1 }
+        for c in active {
+            for i in 0..<frames { mono[i] += channels[c][i] }
+        }
+        let n = Float(active.count)
+        for i in 0..<frames { mono[i] /= n }
+        return mono
+    }
+
     /// RMS-Pegel 0…1 (für die Wellenform-Anzeige, leicht logarithmisch gestaucht).
     public static func level(_ samples: UnsafeBufferPointer<Float>) -> Float {
         guard samples.count > 0 else { return 0 }

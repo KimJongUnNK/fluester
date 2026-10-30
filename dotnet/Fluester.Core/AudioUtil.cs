@@ -76,6 +76,31 @@ public static class AudioUtil
         return Resample(mono, rate, SampleRate);
     }
 
+    /// <summary>Mehrkanal (verschränkt) → mono. Gemittelt werden nur Kanäle, auf denen etwas ankommt (bis 10 dB unter dem
+    /// lautesten): Bei Audio-Interfaces und manchen USB-Mikros steckt die Stimme nur auf einem Kanal – der Mittelwert über
+    /// alle würde sie halbieren, „nur Kanal 1“ wäre bei einem Mikro an Eingang 2 stumm.</summary>
+    public static float[] Downmix(ReadOnlySpan<float> interleaved, int channels)
+    {
+        if (channels <= 1) return interleaved.ToArray();
+        int frames = interleaved.Length / channels;
+        Span<double> energy = channels <= 64 ? stackalloc double[channels] : new double[channels];
+        for (int i = 0; i < frames * channels; i++) energy[i % channels] += interleaved[i] * interleaved[i];
+        double loudest = 0;
+        foreach (var e in energy) loudest = Math.Max(loudest, e);
+        var mono = new float[frames];
+        if (loudest <= 0) return mono;
+        Span<bool> use = channels <= 64 ? stackalloc bool[channels] : new bool[channels];
+        int used = 0;
+        for (int c = 0; c < channels; c++) if (use[c] = energy[c] >= loudest * 0.1) used++;
+        for (int f = 0; f < frames; f++)
+        {
+            float sum = 0;
+            for (int c = 0; c < channels; c++) if (use[c]) sum += interleaved[f * channels + c];
+            mono[f] = sum / used;
+        }
+        return mono;
+    }
+
     /// <summary>RMS-Pegel 0…1 für die Wellenform (logarithmisch gestaucht).</summary>
     public static float Level(ReadOnlySpan<float> samples)
     {

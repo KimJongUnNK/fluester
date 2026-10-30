@@ -197,7 +197,7 @@ Führ `brew install whisper-cpp` aus und prüf das Ergebnis mit `ls /opt/homebre
 Manche Felder nehmen kein ⌘V an. Dann unter **Einstellungen › Allgemein › Einfügen** die Methode **„Tippen“** wählen. Jedes Diktat liegt außerdem im **Verlauf**.
 
 **Das falsche Mikrofon nimmt auf.**
-Wähl unter **Einstellungen › Allgemein › Mikrofon** den richtigen **Eingang**.
+Wähl unter **Einstellungen › Allgemein › Mikrofon** den richtigen **Eingang**. Steckst du ein USB-Mikro an einen anderen Port oder Hub, erkennt Flüster es wieder. Ist es gar nicht angeschlossen, nimmt Flüster den Systemstandard, und in der Liste steht „nicht angeschlossen“.
 
 **Im Menü steht „Ältere Apple-Erkennung aktiv“.**
 Das neue Sprachpaket lädt noch oder wird auf diesem Mac nicht unterstützt. Diktieren klappt trotzdem. Wer die beste Qualität will, nimmt Whisper lokal.

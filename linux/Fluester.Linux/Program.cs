@@ -274,7 +274,7 @@ static class Cli
     {
         var store = new SettingsStore();
         using var rec = new Recorder();
-        var mic = Recorder.Resolve(store.Current.MicrophoneId, out bool missing);
+        var mic = Recorder.Resolve(store.Current.MicrophoneId, store.Current.MicrophoneName, out bool missing, out _);
         if (missing) Console.WriteLine($"! „{store.Current.MicrophoneId}“ ist nicht angeschlossen – nehme den Systemstandard.");
         Console.WriteLine($"Sprich jetzt 5 Sekunden lang … (Mikrofon: {Recorder.Describe(mic)}, Aufnahme mit {Recorder.Tool ?? "?"})");
         float peak = 0;

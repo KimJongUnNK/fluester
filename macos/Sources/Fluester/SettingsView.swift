@@ -106,6 +106,7 @@ struct SettingsView: View {
 struct GeneralPane: View {
     @ObservedObject var store: SettingsStore
     @State private var devices: [AudioDevices.Device] = []
+    @State private var defaultMic: String?
     @State private var loginError: String?
 
     var body: some View {
@@ -136,11 +137,18 @@ struct GeneralPane: View {
                 Toggle("Leerzeichen automatisch ergänzen", isOn: $store.s.smartSpacing)
             }
 
-            Section("Mikrofon") {
+            Section {
                 Picker("Eingang", selection: $store.s.microphoneUID) {
-                    Text("Systemstandard").tag("")
+                    Text(defaultMic.map { "Systemstandard (\($0))" } ?? "Systemstandard").tag("")
                     ForEach(devices) { Text($0.name).tag($0.uid) }
+                    if !store.s.microphoneUID.isEmpty, !devices.contains(where: { $0.uid == store.s.microphoneUID }) {
+                        Text("\(store.s.microphoneName.isEmpty ? "Gewähltes Mikrofon" : store.s.microphoneName) – nicht angeschlossen")
+                            .tag(store.s.microphoneUID)
+                    }
                 }
+            } header: { Text("Mikrofon") } footer: {
+                Text("Fehlt das gewählte Mikrofon, nimmt Flüster den Systemstandard. An einem anderen USB-Port oder Hub wird es wiedererkannt.")
+                    .foregroundStyle(.secondary)
             }
 
             Section("Darstellung & System") {
@@ -155,7 +163,22 @@ struct GeneralPane: View {
             }
         }
         .formStyle(.grouped)
-        .onAppear { devices = AudioDevices.inputs() }
+        .onAppear { reloadDevices() }
+        .onReceive(NotificationCenter.default.publisher(for: AudioDevices.changed)) { _ in reloadDevices() }
+        .onChange(of: store.s.microphoneUID) { _, uid in
+            if let d = devices.first(where: { $0.uid == uid }) { store.s.microphoneName = d.name } else if uid.isEmpty { store.s.microphoneName = "" }
+        }
+    }
+
+    /// Liste neu lesen (auch beim An-/Abstecken) und ein umgestecktes Mikrofon unter seiner neuen UID übernehmen.
+    private func reloadDevices() {
+        devices = AudioDevices.inputs()
+        defaultMic = AudioDevices.defaultInput?.name
+        if let d = AudioDevices.resolve(uid: store.s.microphoneUID, name: store.s.microphoneName),
+           d.uid != store.s.microphoneUID || d.name != store.s.microphoneName {
+            store.s.microphoneUID = d.uid
+            store.s.microphoneName = d.name
+        }
     }
 }
 

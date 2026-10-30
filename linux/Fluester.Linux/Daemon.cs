@@ -271,7 +271,12 @@ sealed class Daemon : IDisposable
         try
         {
             var wanted = store.Current.MicrophoneId;
-            var mic = Recorder.Resolve(wanted, out bool missing);
+            var mic = Recorder.Resolve(wanted, store.Current.MicrophoneName, out bool missing, out var moved);
+            if (moved != null)
+            {
+                Log.Write($"Mikrofon „{moved.Name}“ unter neuer Id wiedergefunden ({wanted} → {moved.Id})");
+                store.Update(s => { s.MicrophoneId = moved.Id; s.MicrophoneName = moved.Name; });
+            }
             if (missing && missingMicNotified != wanted)
             {
                 missingMicNotified = wanted;

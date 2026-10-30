@@ -112,7 +112,7 @@ Manche Felder nehmen kein Strg+V an. Stell dann unter **Einstellungen › Allgem
 Öffne **Windows-Einstellungen › Datenschutz und Sicherheit › Mikrofon** und schalte dort **„Desktop-Apps den Zugriff erlauben“** ein. Mit **Einstellungen › Allgemein › Mikrofon prüfen** testest du es.
 
 **Falsches Mikrofon.**
-Wähl unter **Einstellungen › Allgemein › Mikrofon** den richtigen **Eingang**.
+Wähl unter **Einstellungen › Allgemein › Mikrofon** den richtigen **Eingang**. Steckst du ein USB-Mikro an einen anderen Port oder Hub (Windows nennt es dann z. B. „2- Yeti“), erkennt Flüster es wieder. „Standard“ folgt dem Eingang unter **Windows-Einstellungen › System › Sound**.
 
 **Die Erkennung ist langsam.**
 Prüf unter **Einstellungen › Erkennung**, ob „Grafikkarte nutzen“ an ist. Dort steht auch, ob gerade die Grafikkarte oder der Prozessor rechnet. Ohne Grafikkarte nimmst du das Modell **Small**, oder du schaltest auf **Groq**.

@@ -123,6 +123,8 @@ public sealed class Settings
     public InsertMethod InsertMethod { get; set; } = InsertMethod.Paste;
     public bool SmartSpacing { get; set; } = true;
     public string MicrophoneId { get; set; } = "";
+    /// <summary>Name des gewählten Mikrofons – zum Wiederfinden, wenn es an einem anderen USB-Port oder Hub eine neue Id bekommt.</summary>
+    public string MicrophoneName { get; set; } = "";
     public bool LaunchAtLogin { get; set; } = true;
     public bool OnboardingDone { get; set; }
     public bool KeepHistory { get; set; } = true;
@@ -188,6 +190,7 @@ public sealed class Settings
             s.CloudChat ??= new Settings().CloudChat;
             s.Language ??= "auto";
             s.MicrophoneId ??= "";
+            s.MicrophoneName ??= "";
             s.PasteShortcut ??= "auto";
             return s;
         }
