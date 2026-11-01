@@ -2,7 +2,7 @@
 
 Alle wichtigen Änderungen an Flüster. Versionen folgen [Semantic Versioning](https://semver.org/lang/de/).
 
-## [Unveröffentlicht]
+## [1.3.1] – 2026-11-01
 
 Mikrofon-Auswahl verlässlich, vor allem mit USB-Mikros direkt am Rechner oder über einen Hub.
 
