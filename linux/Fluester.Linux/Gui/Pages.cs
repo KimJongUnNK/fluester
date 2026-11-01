@@ -102,7 +102,7 @@ sealed partial class Pages : IDisposable
         {
             test!.Sensitive = false;
             Ui.SetSubtitle(levelRow, "Sprich jetzt ein paar Worte …");
-            meter.Start(Store.Current.MicrophoneId, 4, (peak, err) =>
+            meter.Start(Store.Current.MicrophoneId, Store.Current.MicrophoneName, 4, (peak, err) =>
             {
                 test.Sensitive = true;
                 Ui.SetSubtitle(levelRow, LevelMeter.Verdict(peak, err));

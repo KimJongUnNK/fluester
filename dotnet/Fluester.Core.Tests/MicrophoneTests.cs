@@ -201,4 +201,109 @@ public class MicrophoneTests
         Assert.Empty(MicrophoneParser.Matches(mics, "Rode"));
         Assert.Empty(MicrophoneParser.Matches(mics, ""));
     }
+
+    // Windows-Endpunkte: USB-Mikro am Hub umgesteckt → neue Id, Windows nummeriert den Namen („2- “)
+    static readonly List<Microphone> WindowsMics = new()
+    {
+        new("{0.0.1.00000000}.{aaaa}", "Mikrofonarray (Realtek(R) Audio)", IsDefault: true),
+        new("{0.0.1.00000000}.{bbbb}", "Mikrofon (2- Yeti Stereo Microphone)"),
+    };
+
+    [Fact]
+    public void FindPrefersExactId()
+    {
+        Assert.Equal("{0.0.1.00000000}.{bbbb}", MicrophoneParser.Find(WindowsMics, "{0.0.1.00000000}.{bbbb}", "irgendwas")!.Id);
+        Assert.Null(MicrophoneParser.Find(WindowsMics, "", "Mikrofon (Yeti Stereo Microphone)"));
+    }
+
+    [Fact]
+    public void FindsUsbMicrophoneOnAnotherPortByName()
+    {
+        // Gemerkt am alten Port ohne Nummer, jetzt mit „2- “ unter neuer Id
+        var hit = MicrophoneParser.Find(WindowsMics, "{0.0.1.00000000}.{alt}", "Mikrofon (Yeti Stereo Microphone)");
+        Assert.Equal("{0.0.1.00000000}.{bbbb}", hit!.Id);
+        // Ohne gemerkten Namen (Einstellungen von vor dem Update) kein Raten
+        Assert.Null(MicrophoneParser.Find(WindowsMics, "{0.0.1.00000000}.{alt}", ""));
+        Assert.Null(MicrophoneParser.Find(WindowsMics, "{0.0.1.00000000}.{alt}", "Mikrofon (Rode NT-USB)"));
+    }
+
+    [Fact]
+    public void FindRefusesWhenTwoIdenticalMicrophonesMatch()
+    {
+        var two = new List<Microphone>
+        {
+            new("{a}", "Mikrofon (USB Audio Device)"),
+            new("{b}", "Mikrofon (2- USB Audio Device)"),
+        };
+        Assert.Null(MicrophoneParser.Find(two, "{alt}", "Mikrofon (USB Audio Device)"));
+    }
+
+    [Fact]
+    public void FindsPipeWireSourceAfterProfileOrPortChange()
+    {
+        var mics = new List<Microphone>
+        {
+            new("alsa_input.pci-0000_00_1f.3.analog-stereo", "Built-in Audio Analog Stereo"),
+            new("alsa_input.usb-Blue_Microphones_Yeti_Stereo_Microphone_REV8-00.mono-fallback", "Yeti Stereo Microphone Mono"),
+            new("alsa_input.pci-0000_00_14.0-usb-0_3_1.0.analog-stereo", "USB PnP Audio Device Analog Stereo"),
+        };
+        // Profil gewechselt (Stereo → Mono): gleiche Id ohne Profil
+        Assert.Equal(mics[1], MicrophoneParser.Find(mics, "alsa_input.usb-Blue_Microphones_Yeti_Stereo_Microphone_REV8-00.analog-stereo", ""));
+        // Gerät ohne Seriennummer an anderem Hub-Port: Pfad neu, Name gleich
+        Assert.Equal(mics[2], MicrophoneParser.Find(mics, "alsa_input.pci-0000_00_14.0-usb-0_2_4.0.analog-stereo", "USB PnP Audio Device Analog Stereo"));
+        Assert.Null(MicrophoneParser.Find(mics, "alsa_input.usb-Elgato_Wave_3-00.analog-stereo", "Wave:3 Analog Stereo"));
+    }
+
+    [Theory]
+    [InlineData("Mikrofon (2- Yeti Stereo Microphone)", "mikrofon (yeti stereo microphone)")]
+    [InlineData("12- USB Audio Device", "usb audio device")]
+    [InlineData("Yeti Stereo Microphone Analog Stereo", "yeti stereo microphone")]
+    [InlineData("Yeti Stereo Microphone Mono", "yeti stereo microphone")]
+    [InlineData("HD Pro Webcam C920 Digital Stereo (IEC958)", "hd pro webcam c920 digital stereo (iec958)")]
+    [InlineData("  RØDE   NT-USB  ", "røde nt-usb")]
+    [InlineData("Model 2-Channel Interface", "model 2-channel interface")]
+    public void NormalizeNameIgnoresPortNumbersAndProfiles(string name, string expected) =>
+        Assert.Equal(expected, MicrophoneParser.NormalizeName(name));
+
+    [Fact]
+    public void StableIdDropsOnlyThePipeWireProfile()
+    {
+        Assert.Equal("alsa_input.usb-RODE_NT-USB-00", MicrophoneParser.StableId("alsa_input.usb-RODE_NT-USB-00.analog-stereo"));
+        Assert.Equal("{0.0.1.00000000}.{bbbb}", MicrophoneParser.StableId("{0.0.1.00000000}.{bbbb}"));
+        Assert.Equal("plughw:CARD=Headset,DEV=0", MicrophoneParser.StableId("plughw:CARD=Headset,DEV=0"));
+        Assert.Equal("alsa_input.", MicrophoneParser.StableId("alsa_input."));
+    }
+
+    [Fact]
+    public void MicrophoneNameSurvivesSettingsRoundTripAndOldFiles()
+    {
+        var s = new Settings { MicrophoneId = "{b}", MicrophoneName = "Mikrofon (Yeti)" };
+        Assert.Equal("Mikrofon (Yeti)", Settings.FromJson(s.ToJson()).MicrophoneName);
+        Assert.Equal("", Settings.FromJson("""{ "microphoneId": "{b}" }""").MicrophoneName);
+        Assert.Equal("", Settings.FromJson("""{ "microphoneName": null }""").MicrophoneName);
+    }
+
+    [Fact]
+    public void DownmixKeepsVoiceOnASingleChannel()
+    {
+        // Audio-Interface: Mikro an Eingang 2, Eingang 1 leer → volle Lautstärke statt halber oder Stille
+        var interleaved = new float[] { 0, 0.5f, 0, -0.5f, 0, 0.25f };
+        Assert.Equal(new[] { 0.5f, -0.5f, 0.25f }, AudioUtil.Downmix(interleaved, 2));
+    }
+
+    [Fact]
+    public void DownmixAveragesActiveChannels()
+    {
+        Assert.Equal(new[] { 0.3f, -0.2f }, AudioUtil.Downmix(new float[] { 0.2f, 0.4f, -0.2f, -0.2f }, 2));
+        // Rauschen 30 dB unter der Stimme zählt nicht mit
+        var mixed = AudioUtil.Downmix(new float[] { 0.5f, 0.01f, -0.5f, -0.01f }, 2);
+        Assert.Equal(new[] { 0.5f, -0.5f }, mixed);
+        Assert.Equal(new[] { 0f, 0f }, AudioUtil.Downmix(new float[4], 2));
+        Assert.Equal(new[] { 0.1f, 0.2f }, AudioUtil.Downmix(new float[] { 0.1f, 0.2f }, 1));
+        // Unvollständiger letzter Frame fällt weg; viele Kanäle (Interface mit 18 Eingängen)
+        Assert.Single(AudioUtil.Downmix(new float[] { 0.1f, 0.1f, 0.1f }, 2));
+        var wide = new float[18 * 2];
+        wide[17] = 0.8f; wide[18 + 17] = -0.8f;
+        Assert.Equal(new[] { 0.8f, -0.8f }, AudioUtil.Downmix(wide, 18));
+    }
 }

@@ -210,3 +210,67 @@ final class APITests: XCTestCase {
         XCTAssertEqual(OpenAICompatibleClient.describe(status: 401, body: body), "API-Schlüssel ungültig oder fehlt (Invalid API Key)")
     }
 }
+
+final class MicrophoneTests: XCTestCase {
+    // USB-Mikro ohne Seriennummer: Die Location-ID (vorletztes Feld) hängt am Port
+    let devices = [
+        MicrophoneMatch.Candidate(uid: "BuiltInMicrophoneDevice", name: "MacBook Pro-Mikrofon"),
+        MicrophoneMatch.Candidate(uid: "AppleUSBAudioEngine:Unknown Manufacturer:USB PnP Sound Device:14130000:1", name: "USB PnP Sound Device"),
+        MicrophoneMatch.Candidate(uid: "AppleUSBAudioEngine:Blue Microphones:Yeti Stereo Microphone:REV8:1,2", name: "Yeti Stereo Microphone")
+    ]
+
+    func testExactUIDWins() {
+        XCTAssertEqual(MicrophoneMatch.find(devices, uid: "BuiltInMicrophoneDevice", name: "egal"), 0)
+        XCTAssertNil(MicrophoneMatch.find(devices, uid: "", name: "Yeti Stereo Microphone"))
+    }
+
+    func testFindsUSBMicrophoneOnAnotherPortOrHub() {
+        // Gemerkt an Port 0x14200000, jetzt an 0x14130000 (z. B. über einen Hub)
+        XCTAssertEqual(MicrophoneMatch.find(devices, uid: "AppleUSBAudioEngine:Unknown Manufacturer:USB PnP Sound Device:14200000:1", name: ""), 1)
+        // Ganz andere UID, gleicher Name (z. B. nach Firmware-Update)
+        XCTAssertEqual(MicrophoneMatch.find(devices, uid: "alt", name: "  yeti   stereo microphone "), 2)
+        XCTAssertNil(MicrophoneMatch.find(devices, uid: "alt", name: ""))
+        XCTAssertNil(MicrophoneMatch.find(devices, uid: "alt", name: "RØDE NT-USB"))
+    }
+
+    func testTwoIdenticalMicrophonesAreNotGuessed() {
+        let two = [
+            MicrophoneMatch.Candidate(uid: "AppleUSBAudioEngine:Generic:USB Audio:14100000:1", name: "USB Audio"),
+            MicrophoneMatch.Candidate(uid: "AppleUSBAudioEngine:Generic:USB Audio:14300000:1", name: "USB Audio")
+        ]
+        XCTAssertNil(MicrophoneMatch.find(two, uid: "AppleUSBAudioEngine:Generic:USB Audio:14200000:1", name: "USB Audio"))
+    }
+
+    func testStableUID() {
+        XCTAssertEqual(MicrophoneMatch.stableUID("AppleUSBAudioEngine:A:B:14200000:1"), "AppleUSBAudioEngine:A:B:1")
+        XCTAssertEqual(MicrophoneMatch.stableUID("BuiltInMicrophoneDevice"), "BuiltInMicrophoneDevice")
+        XCTAssertEqual(MicrophoneMatch.stableUID("AppleUSBAudioEngine:kurz:1"), "AppleUSBAudioEngine:kurz:1")
+    }
+
+    func testDownmixKeepsVoiceOnASingleChannel() {
+        // Audio-Interface: Mikro an Eingang 2, Eingang 1 leer → volle Lautstärke statt halber oder Stille
+        XCTAssertEqual(AudioUtil.downmix([[0, 0, 0], [0.5, -0.5, 0.25]]), [0.5, -0.5, 0.25])
+    }
+
+    func testDownmixAveragesActiveChannels() {
+        let both = AudioUtil.downmix([[0.2, -0.2], [0.4, -0.2]])
+        XCTAssertEqual(both[0], 0.3, accuracy: 1e-6)
+        XCTAssertEqual(both[1], -0.2, accuracy: 1e-6)
+        // Rauschen 30 dB unter der Stimme zählt nicht mit
+        XCTAssertEqual(AudioUtil.downmix([[0.5, -0.5], [0.01, -0.01]]), [0.5, -0.5])
+        XCTAssertEqual(AudioUtil.downmix([[0, 0], [0, 0]]), [0, 0])
+        XCTAssertEqual(AudioUtil.downmix([[0.1, 0.2]]), [0.1, 0.2])
+        XCTAssertEqual(AudioUtil.downmix([]), [])
+    }
+
+    func testMicrophoneNameInSettings() throws {
+        var s = Settings()
+        s.microphoneUID = "AppleUSBAudioEngine:A:B:14200000:1"
+        s.microphoneName = "USB PnP Sound Device"
+        let back = try JSONDecoder().decode(Settings.self, from: JSONEncoder().encode(s))
+        XCTAssertEqual(back.microphoneName, "USB PnP Sound Device")
+        let old = try JSONDecoder().decode(Settings.self, from: #"{"microphoneUID":"x"}"#.data(using: .utf8)!)
+        XCTAssertEqual(old.microphoneUID, "x")
+        XCTAssertEqual(old.microphoneName, "")
+    }
+}

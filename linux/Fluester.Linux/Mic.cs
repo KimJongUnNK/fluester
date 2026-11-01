@@ -17,11 +17,11 @@ static class Mic
             case "":
                 return Choose(store, yes: false);
             case "list" or "liste" or "ls":
-                Print(store.Current.MicrophoneId, Recorder.Devices());
+                Print(store.Current.MicrophoneId, Recorder.Devices(), store.Current.MicrophoneName);
                 return 0;
             case "test":
                 double seconds = args.Length > 2 && args[1] == "--seconds" && double.TryParse(args[2], System.Globalization.CultureInfo.InvariantCulture, out var s) ? s : 5;
-                return LevelTest(store.Current.MicrophoneId, seconds) ? 0 : 1;
+                return LevelTest(store.Current.MicrophoneId, seconds, store.Current.MicrophoneName) ? 0 : 1;
             default:
                 var mics = Recorder.Devices();
                 Set(store, Pick(mics, string.Join(' ', args)), mics);
@@ -30,18 +30,20 @@ static class Mic
     }
 
     /// <summary>Liste mit Nummern; ● markiert die aktuelle Wahl. 0 = Systemstandard.</summary>
-    public static void Print(string current, List<Microphone> mics)
+    public static void Print(string current, List<Microphone> mics, string currentName = "")
     {
+        // Unter neuer Id (anderer USB-Port/Hub) gilt es trotzdem als gewählt – Flüster nimmt es beim Diktat genauso
+        var chosen = MicrophoneParser.Find(mics, current, currentName);
         Console.WriteLine($"Mikrofone (Aufnahme über {Recorder.Tool ?? "–"}):");
         var def = mics.FirstOrDefault(m => m.IsDefault);
         Console.WriteLine($"  {(current.Length == 0 ? "●" : " ")} 0  Systemstandard{(def != null ? " – gerade: " + def.Name : "")}");
         for (int i = 0; i < mics.Count; i++)
         {
             var m = mics[i];
-            Console.WriteLine($"  {(m.Id == current ? "●" : " ")} {i + 1}  {m.Name}{(m.Muted ? "  · stummgeschaltet" : "")}");
+            Console.WriteLine($"  {(m == chosen ? "●" : " ")} {i + 1}  {m.Name}{(m.Muted ? "  · stummgeschaltet" : "")}");
         }
-        if (current.Length > 0 && mics.Count > 0 && mics.All(m => m.Id != current))
-            Console.WriteLine($"  ●    {current} – nicht angeschlossen, solange gilt der Systemstandard");
+        if (current.Length > 0 && mics.Count > 0 && chosen == null)
+            Console.WriteLine($"  ●    {(currentName.Length > 0 ? currentName : current)} – nicht angeschlossen, solange gilt der Systemstandard");
         if (mics.Count == 0)
             Console.WriteLine(Recorder.Tool == null
                 ? "  Kein Aufnahme-Werkzeug gefunden – „fluester setup“ installiert es."
@@ -55,7 +57,8 @@ static class Mic
         if (query is "0" or "default" or "standard" or "systemstandard" or "auto") return null;
         var hits = MicrophoneParser.Matches(mics, query);
         if (hits.Count == 1) return hits[0];
-        Print(new SettingsStore().Current.MicrophoneId, mics);
+        var current = new SettingsStore().Current;
+        Print(current.MicrophoneId, mics, current.MicrophoneName);
         throw new FluesterException(hits.Count == 0
             ? $"Kein Mikrofon „{query}“ – nimm eine Nummer aus der Liste"
             : $"„{query}“ passt auf {hits.Count} Mikrofone – nimm die Nummer");
@@ -63,7 +66,7 @@ static class Mic
 
     static void Set(SettingsStore store, Microphone? mic, List<Microphone> mics)
     {
-        store.Update(s => s.MicrophoneId = mic?.Id ?? "");
+        store.Update(s => { s.MicrophoneId = mic?.Id ?? ""; s.MicrophoneName = mic?.Name ?? ""; });
         Console.WriteLine($"✓ Mikrofon: {Recorder.Describe(mic?.Id ?? "", mics)}");
         if (mic is { Muted: true }) OfferUnmute(mic, ask: !Console.IsInputRedirected);
         if (Daemon.IsRunning()) Console.WriteLine("  Flüster nimmt es ab dem nächsten Diktat.");
@@ -73,7 +76,7 @@ static class Mic
     public static int Choose(SettingsStore store, bool yes)
     {
         var mics = Recorder.Devices();
-        Print(store.Current.MicrophoneId, mics);
+        Print(store.Current.MicrophoneId, mics, store.Current.MicrophoneName);
         if (yes || Console.IsInputRedirected || mics.Count == 0) return 0;
         while (true)
         {
@@ -85,7 +88,7 @@ static class Mic
         }
         Console.Write("  Pegel testen? [J/n] ");
         var t = Console.ReadLine()?.Trim().ToLowerInvariant();
-        if (string.IsNullOrEmpty(t) || t.StartsWith('j') || t.StartsWith('y')) LevelTest(store.Current.MicrophoneId, 5);
+        if (string.IsNullOrEmpty(t) || t.StartsWith('j') || t.StartsWith('y')) LevelTest(store.Current.MicrophoneId, 5, store.Current.MicrophoneName);
         return 0;
     }
 
@@ -101,10 +104,11 @@ static class Mic
     }
 
     /// <summary>Nimmt ein paar Sekunden auf und zeigt den Pegel live. true = es kommt hörbar Ton an.</summary>
-    public static bool LevelTest(string configured, double seconds)
+    public static bool LevelTest(string configured, double seconds, string configuredName = "")
     {
-        var id = Recorder.Resolve(configured, out bool missing);
-        if (missing) Console.WriteLine($"  ! „{configured}“ ist nicht angeschlossen – teste den Systemstandard.");
+        var id = Recorder.Resolve(configured, configuredName, out bool missing, out var moved);
+        if (missing) Console.WriteLine($"  ! „{(configuredName.Length > 0 ? configuredName : configured)}“ ist nicht angeschlossen – teste den Systemstandard.");
+        if (moved != null) Console.WriteLine($"  ✓ „{moved.Name}“ unter neuer Id wiedergefunden (anderer USB-Port, Hub oder Profil).");
         bool live = !Console.IsOutputRedirected;
         Console.WriteLine($"Pegel von {Recorder.Describe(id)} – sprich ein paar Worte …");
         using var rec = new Recorder();

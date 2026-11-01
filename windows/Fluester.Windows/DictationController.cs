@@ -130,7 +130,11 @@ sealed class DictationController : IDisposable
         selection = command ? TextInserter.CopySelection() : null;
         try
         {
-            recorder.Start(store.Current.MicrophoneId);
+            var s = store.Current;
+            recorder.Start(s.MicrophoneId, s.MicrophoneName);
+            // Unter neuer Id wiedergefunden (anderer USB-Port/Hub) oder Name noch nicht gemerkt → für nächstes Mal speichern
+            if (recorder.Selected is { } mic && (mic.Id != s.MicrophoneId || mic.Name != s.MicrophoneName))
+                store.Update(x => { x.MicrophoneId = mic.Id; x.MicrophoneName = mic.Name; });
         }
         catch (Exception e)
         {

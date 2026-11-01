@@ -44,7 +44,7 @@ sealed class OnboardingForm : Form
         var micStatus = new Label { AutoSize = true, MaximumSize = new Size(560, 0) };
         void CheckMic()
         {
-            var err = AudioRecorder.Probe(store.Current.MicrophoneId);
+            var err = AudioRecorder.Probe(store.Current.MicrophoneId, store.Current.MicrophoneName);
             micStatus.Text = err ?? "✓ Mikrofon bereit";
             micStatus.ForeColor = err == null ? Theme.Good : Theme.Warn;
         }

@@ -328,6 +328,19 @@ sealed class Recorder : IDisposable
         return missing ? "" : deviceId;
     }
 
+    /// <summary>Wie <see cref="Resolve(string, out bool)"/>, findet das Mikrofon aber auch unter neuer Id wieder: anderer USB-Port
+    /// oder Hub (neuer Pfad), anderes Profil (Stereo ↔ Mono), gleicher Name. Dann steht es in <paramref name="moved"/>.</summary>
+    public static string Resolve(string deviceId, string deviceName, out bool missing, out Microphone? moved)
+    {
+        moved = null;
+        var id = Resolve(deviceId, out missing);
+        if (!missing) return id;
+        if (MicrophoneParser.Find(Devices(), deviceId, deviceName) is not { } found) return "";
+        missing = false;
+        moved = found;
+        return found.Id;
+    }
+
     /// <summary>Lesbarer Name des eingestellten Mikrofons, z. B. „Systemstandard (Yeti Stereo)“.</summary>
     public static string Describe(string deviceId, List<Microphone>? mics = null)
     {

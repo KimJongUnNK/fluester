@@ -118,7 +118,7 @@ Pegel von Yeti Stereo Microphone Analog Stereo – sprich ein paar Worte …
 - **Zurück auf den Systemstandard:** `fluester mic 0`.
 - **Nur Pegel prüfen:** `fluester mic test`. Ob die Erkennung klappt, zeigt `fluester test`.
 - **Laufendes Flüster:** Es nimmt die Wahl ab dem nächsten Diktat, ohne Neustart.
-- **Mikrofon abgesteckt:** Flüster nimmt solange den Systemstandard und sagt einmal Bescheid. Steckst du es wieder an, gilt wieder deine Wahl.
+- **Mikrofon abgesteckt:** Flüster nimmt solange den Systemstandard und sagt einmal Bescheid. Steckst du es wieder an, gilt wieder deine Wahl, auch an einem anderen USB-Port oder Hub.
 - **Stummgeschaltet:** Ist das gewählte Mikrofon stumm, bietet `fluester mic` an, die Stummschaltung aufzuheben.
 
 ### Befehle

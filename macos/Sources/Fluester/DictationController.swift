@@ -204,7 +204,12 @@ final class DictationController {
         target = TargetApp.current()
         selection = command ? TextInserter.selectedTextAX() : nil
         do {
-            try recorder.start(deviceUID: store.s.microphoneUID)
+            try recorder.start(deviceUID: store.s.microphoneUID, deviceName: store.s.microphoneName)
+            // Unter neuer UID wiedergefunden (anderer USB-Port/Hub) oder Name noch nicht gemerkt → für nächstes Mal speichern
+            if let mic = recorder.selected, mic.uid != store.s.microphoneUID || mic.name != store.s.microphoneName {
+                store.s.microphoneUID = mic.uid
+                store.s.microphoneName = mic.name
+            }
         } catch {
             gestures.reset()
             fail(error.localizedDescription)

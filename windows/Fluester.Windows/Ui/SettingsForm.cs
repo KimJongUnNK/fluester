@@ -131,14 +131,22 @@ sealed class SettingsForm : Form
         pb.Section("Mikrofon");
         var mic = pb.Card();
         var devices = AudioRecorder.Devices();
-        var options = new List<(string Id, string Name)> { ("", "Standard (Windows-Einstellung)") };
-        options.AddRange(devices.Select(d => (d.Id, d.Name + (d.IsDefault ? " · Standard" : ""))));
-        mic.Row("Eingang", Controls2.Combo(options, o => o.Name, options.FirstOrDefault(o => o.Id == s.MicrophoneId), v => Update(x => x.MicrophoneId = v.Id), 340));
+        var options = new List<(string Id, string Name, string Label)> { ("", "", "Standard (Windows-Einstellung)") };
+        options.AddRange(devices.Select(d => (d.Id, d.Name, d.Name + (d.IsDefault ? " · Standard" : "") + (d.Muted ? " · stumm" : ""))));
+        // Gewähltes Mikrofon unter neuer Id (anderer USB-Port/Hub) gleich hier wiederfinden, sonst als „nicht angeschlossen“ zeigen
+        var chosen = Fluester.Engine.MicrophoneParser.Find(devices, s.MicrophoneId, s.MicrophoneName);
+        if (chosen != null && (chosen.Id != s.MicrophoneId || chosen.Name != s.MicrophoneName))
+            Update(x => { x.MicrophoneId = chosen.Id; x.MicrophoneName = chosen.Name; });
+        if (s.MicrophoneId.Length > 0 && chosen == null)
+            options.Add((s.MicrophoneId, s.MicrophoneName, (s.MicrophoneName.Length > 0 ? s.MicrophoneName : "Gewähltes Mikrofon") + " – nicht angeschlossen"));
+        var selectedId = chosen?.Id ?? s.MicrophoneId;
+        mic.Row("Eingang", Controls2.Combo(options, o => o.Label, options.FirstOrDefault(o => o.Id == selectedId),
+            v => Update(x => { x.MicrophoneId = v.Id; x.MicrophoneName = v.Name; }), 340));
         var probe = new Label { AutoSize = true, ForeColor = Theme.Secondary };
         var test = Theme.SecondaryButton("Mikrofon prüfen");
         test.Click += (_, _) =>
         {
-            var err = AudioRecorder.Probe(store.Current.MicrophoneId);
+            var err = AudioRecorder.Probe(store.Current.MicrophoneId, store.Current.MicrophoneName);
             probe.Text = err ?? "✓ Mikrofon funktioniert";
             probe.ForeColor = err == null ? Theme.Good : Theme.Warn;
         };

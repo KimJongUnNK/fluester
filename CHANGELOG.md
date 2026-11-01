@@ -2,6 +2,17 @@
 
 Alle wichtigen Änderungen an Flüster. Versionen folgen [Semantic Versioning](https://semver.org/lang/de/).
 
+## [1.3.1] – 2026-11-01
+
+Mikrofon-Auswahl verlässlich, vor allem mit USB-Mikros direkt am Rechner oder über einen Hub.
+
+- **Mikrofon wird wiedererkannt, auch an einem anderen USB-Port oder Hub.** Mikros ohne Seriennummer bekommen ihre Kennung vom Anschluss. Nach dem Umstecken nahm Flüster deshalb still den Systemstandard. Jetzt findet es das gewählte Mikro über Kennung, Gerät und Namen wieder und merkt sich die neue Kennung. macOS, Windows (auch „2- Yeti“) und Linux (neuer Pfad, Profil Stereo ↔ Mono). Bei zwei gleichen Mikros wird nicht geraten.
+- **Alle Kanäle zählen.** Bei Audio-Interfaces und manchen USB-Mikros liegt die Stimme nur auf einem Kanal. Der Mac hörte bisher nur Kanal 1 (Mikro an Eingang 2 = stumm), Windows mittelte alle (halbe Lautstärke). Jetzt werden nur Kanäle mit Ton gemischt.
+- **Mikro fällt mitten im Diktat weg** (Kabel, Hub trennt kurz, Abtastrate geändert): macOS und Windows nehmen weiter auf, statt den Rest still zu verlieren. Das bisher Gesagte bleibt.
+- **Frisch eingesteckt oder gerade aufgewacht:** Startet das Mikro nicht sofort, versucht Flüster es noch einmal und nimmt sonst den Systemstandard, statt mit Fehler abzubrechen.
+- **macOS:** Die Aufnahme übernimmt die Abtastrate des Geräts (44,1 / 48 / 96 kHz). Ein falsches Format konnte Flüster beim Start abstürzen lassen. Die Mikrofonliste aktualisiert sich beim An- und Abstecken, zeigt den aktuellen Systemstandard und blendet verborgene Geräte aus. Ein abgestecktes Mikro steht als „nicht angeschlossen“ in der Liste, statt dass die Auswahl leer ist.
+- **Windows:** „Standard“ folgt jetzt dem Standard-Eingang aus den Windows-Einstellungen, nicht dem Kommunikationsgerät. Stumme Mikros sind in der Liste markiert. Eine klare Meldung, wenn eine andere App das Mikro exklusiv belegt.
+
 ## [1.3.0] – 2026-10-15
 
 Linux bekommt ein App-Fenster wie am Mac. Windows öffnet sein Fenster jetzt wie eine App.

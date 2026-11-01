@@ -1,147 +1,254 @@
 using Fluester.Core;
+using Fluester.Engine;
 using NAudio.CoreAudioApi;
 using NAudio.Wave;
 
 namespace Fluester.Windows;
 
 /// <summary>Mikrofon über WASAPI (gemeinsamer Modus). Sammelt mono im Geräteformat und rechnet am Ende auf 16 kHz um.
-/// Für die Wellenform kommt laufend ein Pegel 0…1.</summary>
+/// Für die Wellenform kommt laufend ein Pegel 0…1. Fällt das Mikrofon mitten im Diktat weg (Kabel, USB-Hub, Treiber),
+/// nimmt der Systemstandard weiter auf.</summary>
 sealed class AudioRecorder : IDisposable
 {
     public event Action<float>? Level;
 
     WasapiCapture? capture;
-    readonly List<float> buffer = new();
+    // Ein Abschnitt je Gerät, jeder mit eigener Rate – nach einem Wechsel mitten im Diktat sind es zwei
+    readonly List<(int Rate, List<float> Samples)> segments = new();
     readonly object gate = new();
-    int deviceRate = 48000;
+    bool stopping, switched;
     public bool IsRecording { get; private set; }
     public double Elapsed => IsRecording ? (DateTime.UtcNow - started).TotalSeconds : 0;
     DateTime started;
 
-    public sealed record Device(string Id, string Name, bool IsDefault);
+    /// <summary>Das gewählte Mikrofon, so wie es gerade heißt – auch wenn es unter neuer Id wiedergefunden wurde.
+    /// null = Systemstandard (so eingestellt oder weil das gewählte fehlt).</summary>
+    public Microphone? Selected { get; private set; }
+    /// <summary>Das gewählte Mikrofon fehlt oder streikt, es läuft der Systemstandard.</summary>
+    public bool Missing { get; private set; }
 
-    public static List<Device> Devices()
+    public static List<Microphone> Devices()
     {
-        var list = new List<Device>();
+        var list = new List<Microphone>();
         try
         {
             using var en = new MMDeviceEnumerator();
-            string? def = null;
-            try { def = en.GetDefaultAudioEndpoint(DataFlow.Capture, Role.Communications).ID; } catch { }
+            var def = Default(en)?.ID;
             foreach (var d in en.EnumerateAudioEndPoints(DataFlow.Capture, DeviceState.Active))
-                list.Add(new Device(d.ID, d.FriendlyName, d.ID == def));
+                list.Add(new Microphone(d.ID, d.FriendlyName, IsMuted(d), d.ID == def));
         }
         catch (Exception e)
         {
-            Fluester.Engine.Log.Write("Mikrofone: " + e.Message);
+            Log.Write("Mikrofone: " + e.Message);
         }
         return list;
     }
 
-    static MMDevice? Find(string id)
+    static bool IsMuted(MMDevice d)
     {
-        using var en = new MMDeviceEnumerator();
-        if (!string.IsNullOrEmpty(id))
-        {
-            // Abgesteckte Geräte liefert GetDevice weiterhin (Zustand „Unplugged“) – dann den Standard nehmen
-            try { var d = en.GetDevice(id); if (d.State == DeviceState.Active) return d; } catch { }
-            Fluester.Engine.Log.Write("Gewähltes Mikrofon nicht angeschlossen – nehme den Standard");
-        }
-        try { return en.GetDefaultAudioEndpoint(DataFlow.Capture, Role.Communications); }
-        catch { return null; }
+        try { return d.AudioEndpointVolume.Mute; } catch { return false; }
     }
 
-    public void Start(string deviceId)
+    /// <summary>Standard-Eingang aus den Windows-Einstellungen („Konsole“), sonst der für Kommunikation.</summary>
+    static MMDevice? Default(MMDeviceEnumerator en)
+    {
+        foreach (var role in new[] { Role.Console, Role.Communications })
+            try { return en.GetDefaultAudioEndpoint(DataFlow.Capture, role); } catch { }
+        return null;
+    }
+
+    /// <summary>Das gewählte Mikrofon – notfalls unter neuer Id wiedergefunden (anderer USB-Port oder Hub) –, sonst der Standard.</summary>
+    MMDevice? Find(MMDeviceEnumerator en, string id, string name)
+    {
+        Selected = null;
+        Missing = false;
+        if (id.Length > 0)
+        {
+            // Abgesteckte Geräte liefert GetDevice weiterhin (Zustand „Unplugged“) – die zählen nicht
+            try { var d = en.GetDevice(id); if (d.State == DeviceState.Active) { Selected = new Microphone(d.ID, d.FriendlyName); return d; } } catch { }
+            if (MicrophoneParser.Find(Devices(), id, name) is { } moved)
+            {
+                try
+                {
+                    var d = en.GetDevice(moved.Id);
+                    Log.Write($"Mikrofon „{moved.Name}“ unter neuer Id wiedergefunden (anderer USB-Port oder Hub)");
+                    Selected = moved;
+                    return d;
+                }
+                catch { }
+            }
+            Missing = true;
+            Log.Write($"Gewähltes Mikrofon „{(name.Length > 0 ? name : id)}“ nicht angeschlossen – nehme den Standard");
+        }
+        return Default(en);
+    }
+
+    public void Start(string deviceId, string deviceName = "")
     {
         Stop();
-        var device = Find(deviceId) ?? throw new FluesterException("Kein Mikrofon gefunden – Einstellungen › Allgemein › Mikrofon");
-        lock (gate) buffer.Clear();
+        lock (gate) { segments.Clear(); stopping = false; switched = false; }
+        using var en = new MMDeviceEnumerator();
+        var device = Find(en, deviceId, deviceName) ?? throw new FluesterException("Kein Mikrofon gefunden – Einstellungen › Allgemein › Mikrofon");
         try
         {
-            capture = new WasapiCapture(device, useEventSync: true, audioBufferMillisecondsLength: 50);
+            Open(device);
         }
-        catch (Exception e)
+        catch (FluesterException) when (Selected != null)
         {
-            throw MicError(e);
-        }
-        var fmt = capture.WaveFormat;
-        deviceRate = fmt.SampleRate;
-        int channels = fmt.Channels;
-        bool isFloat = fmt.Encoding == WaveFormatEncoding.IeeeFloat || (fmt is WaveFormatExtensible ext && ext.SubFormat == NAudio.Dmo.AudioMediaSubtypes.MEDIASUBTYPE_IEEE_FLOAT);
-        int bits = fmt.BitsPerSample;
-        capture.DataAvailable += (_, e) =>
-        {
-            int bytesPerSample = bits / 8;
-            int frames = e.BytesRecorded / (bytesPerSample * channels);
-            var mono = new float[frames];
-            for (int f = 0; f < frames; f++)
+            // Frisch eingesteckte oder gerade aufgewachte USB-Geräte sind manchmal noch nicht bereit
+            Thread.Sleep(250);
+            try
             {
-                float sum = 0;
-                for (int c = 0; c < channels; c++)
-                {
-                    int at = (f * channels + c) * bytesPerSample;
-                    sum += isFloat && bits == 32 ? BitConverter.ToSingle(e.Buffer, at)
-                        : bits == 16 ? BitConverter.ToInt16(e.Buffer, at) / 32768f
-                        : bits == 24 ? (e.Buffer[at] | e.Buffer[at + 1] << 8 | (sbyte)e.Buffer[at + 2] << 16) / 8388608f
-                        : bits == 32 ? BitConverter.ToInt32(e.Buffer, at) / 2147483648f : 0;
-                }
-                mono[f] = sum / channels;
+                Open(device);
             }
-            lock (gate)
+            catch (FluesterException e) when (Default(en) is { } fallback && fallback.ID != device.ID)
             {
-                // Sicherheitsgrenze: 15 Minuten
-                if (buffer.Count < deviceRate * 900) buffer.AddRange(mono);
+                Log.Write($"Mikrofon „{Selected.Name}“ lässt sich nicht öffnen ({e.Message}) – nehme den Standard");
+                Selected = null;
+                Missing = true;
+                Open(fallback);
             }
-            Level?.Invoke(AudioUtil.Level(mono));
-        };
-        capture.RecordingStopped += (_, e) =>
-        {
-            if (e.Exception != null) Fluester.Engine.Log.Write("Aufnahme gestoppt: " + e.Exception.Message);
-        };
-        try
-        {
-            capture.StartRecording();
-        }
-        catch (Exception e)
-        {
-            capture.Dispose();
-            capture = null;
-            throw MicError(e);
         }
         started = DateTime.UtcNow;
         IsRecording = true;
     }
 
-    static Exception MicError(Exception e) =>
-        e.HResult == unchecked((int)0x80070005)
-            ? new FluesterException("Mikrofon gesperrt – Windows-Einstellungen › Datenschutz › Mikrofon › „Desktop-Apps Zugriff erlauben“")
-            : new FluesterException("Mikrofon lässt sich nicht öffnen: " + e.Message);
+    void Open(MMDevice device)
+    {
+        WasapiCapture c;
+        try
+        {
+            c = new WasapiCapture(device, useEventSync: true, audioBufferMillisecondsLength: 50);
+        }
+        catch (Exception e)
+        {
+            throw MicError(e);
+        }
+        var fmt = c.WaveFormat;
+        int rate = fmt.SampleRate, channels = fmt.Channels, bits = fmt.BitsPerSample;
+        bool isFloat = fmt.Encoding == WaveFormatEncoding.IeeeFloat || (fmt is WaveFormatExtensible ext && ext.SubFormat == NAudio.Dmo.AudioMediaSubtypes.MEDIASUBTYPE_IEEE_FLOAT);
+        if (IsMuted(device)) Log.Write($"Mikrofon „{device.FriendlyName}“ ist in Windows stummgeschaltet");
+        var segment = new List<float>();
+        c.DataAvailable += (_, e) =>
+        {
+            int bytesPerSample = bits / 8;
+            var raw = new float[e.BytesRecorded / (bytesPerSample * channels) * channels];
+            for (int i = 0; i < raw.Length; i++)
+            {
+                int at = i * bytesPerSample;
+                raw[i] = isFloat && bits == 32 ? BitConverter.ToSingle(e.Buffer, at)
+                    : bits == 16 ? BitConverter.ToInt16(e.Buffer, at) / 32768f
+                    : bits == 24 ? (e.Buffer[at] | e.Buffer[at + 1] << 8 | (sbyte)e.Buffer[at + 2] << 16) / 8388608f
+                    : bits == 32 ? BitConverter.ToInt32(e.Buffer, at) / 2147483648f : 0;
+            }
+            var mono = AudioUtil.Downmix(raw, channels);
+            lock (gate)
+            {
+                // Sicherheitsgrenze: 15 Minuten
+                if (segment.Count < rate * 900) segment.AddRange(mono);
+            }
+            Level?.Invoke(AudioUtil.Level(mono));
+        };
+        c.RecordingStopped += (_, e) =>
+        {
+            if (e.Exception == null) return;
+            Log.Write("Aufnahme gestoppt: " + e.Exception.Message);
+            ThreadPool.QueueUserWorkItem(_ => Recover(c));
+        };
+        try
+        {
+            c.StartRecording();
+        }
+        catch (Exception e)
+        {
+            c.Dispose();
+            throw MicError(e);
+        }
+        lock (gate)
+        {
+            segments.Add((rate, segment));
+            capture = c;
+        }
+    }
+
+    /// <summary>Mikrofon mitten im Diktat weg: einmal auf den Systemstandard wechseln und weiter aufnehmen,
+    /// statt den Rest still zu verlieren.</summary>
+    void Recover(WasapiCapture dead)
+    {
+        lock (gate)
+        {
+            if (stopping || switched || capture != dead) return;
+            switched = true;
+            capture = null;
+        }
+        try { dead.Dispose(); } catch { }
+        try
+        {
+            using var en = new MMDeviceEnumerator();
+            var d = Default(en) ?? throw new FluesterException("keins angeschlossen");
+            Open(d);
+            Selected = null;
+            Missing = true;
+            Log.Write($"Weiter mit „{d.FriendlyName}“");
+            bool late;
+            lock (gate) late = stopping;
+            if (late) Dispose(TakeCapture());
+        }
+        catch (Exception e)
+        {
+            Log.Write("Kein Ersatz-Mikrofon: " + e.Message);
+        }
+    }
+
+    static Exception MicError(Exception e) => e.HResult switch
+    {
+        unchecked((int)0x80070005) => new FluesterException("Mikrofon gesperrt – Windows-Einstellungen › Datenschutz › Mikrofon › „Desktop-Apps Zugriff erlauben“"),
+        unchecked((int)0x8889000A) => new FluesterException("Mikrofon ist von einer anderen App exklusiv belegt – dort freigeben oder anderes Mikrofon wählen"),
+        _ => new FluesterException("Mikrofon lässt sich nicht öffnen: " + e.Message),
+    };
+
+    WasapiCapture? TakeCapture()
+    {
+        lock (gate)
+        {
+            var c = capture;
+            capture = null;
+            return c;
+        }
+    }
+
+    // Außerhalb von gate: Dispose wartet auf den Aufnahme-Thread, und der braucht gate für die Samples
+    static void Dispose(WasapiCapture? c)
+    {
+        if (c == null) return;
+        try { c.StopRecording(); } catch { }
+        c.Dispose();
+    }
 
     /// <summary>Beendet die Aufnahme und liefert 16 kHz mono.</summary>
     public float[] Stop()
     {
-        if (capture != null)
-        {
-            try { capture.StopRecording(); } catch { }
-            capture.Dispose();
-            capture = null;
-        }
+        lock (gate) stopping = true;
+        Dispose(TakeCapture());
         IsRecording = false;
-        float[] raw;
-        lock (gate) { raw = buffer.ToArray(); buffer.Clear(); }
-        return AudioUtil.Resample(raw, deviceRate, AudioUtil.SampleRate);
+        lock (gate)
+        {
+            var all = segments.SelectMany(s => AudioUtil.Resample(s.Samples.ToArray(), s.Rate, AudioUtil.SampleRate)).ToArray();
+            segments.Clear();
+            return all;
+        }
     }
 
     /// <summary>Kurz prüfen, ob das Mikrofon geöffnet werden darf (Einrichtung).</summary>
-    public static string? Probe(string deviceId)
+    public static string? Probe(string deviceId, string deviceName = "")
     {
         using var r = new AudioRecorder();
         try
         {
-            r.Start(deviceId);
+            r.Start(deviceId, deviceName);
             Thread.Sleep(150);
             r.Stop();
-            return null;
+            return r.Missing ? "Gewähltes Mikrofon nicht angeschlossen – Windows-Standard funktioniert" : null;
         }
         catch (Exception e)
         {

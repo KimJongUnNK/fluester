@@ -124,6 +124,8 @@ public struct Settings: Codable, Equatable, Sendable {
     public var insertMethod: InsertMethod = .paste
     public var smartSpacing: Bool = true
     public var microphoneUID: String = ""
+    /// Name des gewählten Mikrofons – zum Wiederfinden, wenn es an einem anderen USB-Port oder Hub eine neue UID bekommt.
+    public var microphoneName: String = ""
     public var launchAtLogin: Bool = false
     public var onboardingDone: Bool = false
     public var keepHistory: Bool = true
@@ -167,6 +169,7 @@ public struct Settings: Codable, Equatable, Sendable {
         insertMethod = v(.insertMethod, d.insertMethod)
         smartSpacing = v(.smartSpacing, d.smartSpacing)
         microphoneUID = v(.microphoneUID, d.microphoneUID)
+        microphoneName = v(.microphoneName, d.microphoneName)
         launchAtLogin = v(.launchAtLogin, d.launchAtLogin)
         onboardingDone = v(.onboardingDone, d.onboardingDone)
         keepHistory = v(.keepHistory, d.keepHistory)

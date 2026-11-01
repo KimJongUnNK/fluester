@@ -4,40 +4,87 @@ import AudioToolbox
 import FluesterCore
 
 /// Mikrofon-Aufnahme: AVAudioEngine → 16 kHz mono Float32 im Speicher, plus Pegel für die Wellenform.
+/// USB-fest: findet das Mikrofon auch unter neuer UID (anderer Port oder Hub), nimmt alle Kanäle mit, übernimmt die
+/// Abtastrate des Geräts und baut sich neu auf, wenn sich mitten im Diktat das Gerät ändert (abgesteckt, Hub trennt kurz).
 final class AudioRecorder {
     static let sampleRate: Double = 16000
 
     private var engine: AVAudioEngine?
-    private var converter: AVAudioConverter?
+    private var configObserver: NSObjectProtocol?
     private let lock = NSLock()
-    private var samples: [Float] = []
+    private var converter: AVAudioConverter?   // nur unter lock
+    private var samples: [Float] = []          // nur unter lock
     private var startDate = Date()
+    private var wantedUID = ""
+    private var wantedName = ""
+    private var restarts = 0
     private(set) var isRecording = false
+
+    /// Das gewählte Mikrofon, so wie es gerade heißt – auch wenn es unter neuer UID wiedergefunden wurde.
+    /// nil = Systemstandard (so eingestellt oder weil das gewählte fehlt).
+    private(set) var selected: AudioDevices.Device?
+    /// Das gewählte Mikrofon fehlt oder streikt, es läuft der Systemstandard.
+    private(set) var usingFallback = false
 
     /// Wird auf dem Main-Thread mit dem aktuellen Pegel (0…1) aufgerufen.
     var onLevel: ((Float) -> Void)?
 
-    func start(deviceUID: String) throws {
+    func start(deviceUID: String, deviceName: String = "") throws {
         if isRecording { _ = stop() }
-        lock.lock(); samples.removeAll(keepingCapacity: true); lock.unlock()
+        lock.lock(); samples.removeAll(keepingCapacity: true); converter = nil; lock.unlock()
+        wantedUID = deviceUID
+        wantedName = deviceName
+        restarts = 0
+        try startEngine()
+        isRecording = true
+        startDate = Date()
+    }
 
+    /// Gerät auflösen und Engine starten. Frisch eingesteckte oder gerade aufgewachte USB-Geräte sind manchmal erst nach
+    /// einem Moment bereit – dann noch einmal versuchen, zuletzt mit dem Systemstandard.
+    private func startEngine() throws {
+        let device = AudioDevices.resolve(uid: wantedUID, name: wantedName)
+        selected = device
+        usingFallback = !wantedUID.isEmpty && device == nil
+        if usingFallback {
+            NSLog("Flüster: gewähltes Mikrofon „%@“ nicht angeschlossen – nehme den Systemstandard", wantedName.isEmpty ? wantedUID : wantedName)
+        }
+        do {
+            try runEngine(device: device)
+        } catch {
+            guard let device else { throw error }
+            NSLog("Flüster: Mikrofon „%@“ startet nicht (%@) – neuer Versuch", device.name, error.localizedDescription)
+            Thread.sleep(forTimeInterval: 0.25)
+            do {
+                try runEngine(device: AudioDevices.resolve(uid: wantedUID, name: wantedName) ?? device)
+            } catch {
+                NSLog("Flüster: Mikrofon „%@“ startet nicht (%@) – nehme den Systemstandard", device.name, error.localizedDescription)
+                selected = nil
+                usingFallback = true
+                try runEngine(device: nil)
+            }
+        }
+    }
+
+    private func runEngine(device: AudioDevices.Device?) throws {
         let engine = AVAudioEngine()
         let input = engine.inputNode
-        if !deviceUID.isEmpty, let id = AudioDevices.deviceID(forUID: deviceUID), let unit = input.audioUnit {
-            var dev = id
-            AudioUnitSetProperty(unit, kAudioOutputUnitProperty_CurrentDevice, kAudioUnitScope_Global, 0, &dev, UInt32(MemoryLayout<AudioDeviceID>.size))
+        if let device {
+            guard let unit = input.audioUnit else { throw FluesterError("Mikrofon „\(device.name)“ lässt sich nicht wählen") }
+            var id = device.id
+            let status = AudioUnitSetProperty(unit, kAudioOutputUnitProperty_CurrentDevice, kAudioUnitScope_Global, 0, &id, UInt32(MemoryLayout<AudioDeviceID>.size))
+            guard status == noErr else { throw FluesterError("Mikrofon „\(device.name)“ lässt sich nicht wählen (Fehler \(status))") }
         }
-        let inFormat = input.outputFormat(forBus: 0)
-        guard inFormat.sampleRate > 0, inFormat.channelCount > 0 else {
-            throw FluesterError("Kein Mikrofon gefunden")
-        }
-        guard let target = AVAudioFormat(commonFormat: .pcmFormatFloat32, sampleRate: Self.sampleRate, channels: 1, interleaved: false),
-              let conv = AVAudioConverter(from: inFormat, to: target) else {
-            throw FluesterError("Audioformat wird nicht unterstützt")
-        }
-        converter = conv
-        input.installTap(onBus: 0, bufferSize: 2048, format: inFormat) { [weak self] buffer, _ in
-            self?.process(buffer, target: target)
+        // Der Tap muss die Abtastrate der Hardware haben, sonst bricht AVAudioEngine mit einer Ausnahme ab (Absturz).
+        // Nach dem Gerätewechsel kann das Ausgabeformat noch das des alten Geräts sein – dann aus der Hardware bauen.
+        let hw = input.inputFormat(forBus: 0)
+        guard hw.sampleRate > 0, hw.channelCount > 0 else { throw FluesterError("Kein Mikrofon gefunden") }
+        let out = input.outputFormat(forBus: 0)
+        let tapFormat: AVAudioFormat? = out.sampleRate == hw.sampleRate && out.channelCount > 0 ? out
+            : AVAudioFormat(commonFormat: .pcmFormatFloat32, sampleRate: hw.sampleRate, channels: hw.channelCount, interleaved: false)
+        guard let tapFormat else { throw FluesterError("Audioformat des Mikrofons wird nicht unterstützt") }
+        input.installTap(onBus: 0, bufferSize: 4096, format: tapFormat) { [weak self] buffer, _ in
+            self?.process(buffer)
         }
         engine.prepare()
         do {
@@ -47,19 +94,66 @@ final class AudioRecorder {
             throw FluesterError("Mikrofon lässt sich nicht starten: \(error.localizedDescription)")
         }
         self.engine = engine
-        isRecording = true
-        startDate = Date()
+        configObserver = NotificationCenter.default.addObserver(forName: .AVAudioEngineConfigurationChange, object: engine, queue: .main) { [weak self] _ in
+            self?.configurationChanged()
+        }
     }
 
-    private func process(_ buffer: AVAudioPCMBuffer, target: AVAudioFormat) {
-        if let ch = buffer.floatChannelData {
-            let lvl = AudioUtil.level(UnsafeBufferPointer(start: ch[0], count: Int(buffer.frameLength)))
-            DispatchQueue.main.async { [weak self] in self?.onLevel?(lvl) }
+    /// Gerät mitten im Diktat abgesteckt, Hub hat kurz getrennt, Abtastrate geändert: AVAudioEngine hält dann still an.
+    /// Neu aufbauen und weiter aufnehmen – das bisher Gesagte bleibt erhalten.
+    private func configurationChanged() {
+        guard isRecording, restarts < 5 else { return }
+        restarts += 1
+        teardown()
+        do {
+            try startEngine()
+            NSLog("Flüster: Audio-Gerät geändert – Aufnahme läuft weiter mit %@", selected?.name ?? "dem Systemstandard")
+        } catch {
+            NSLog("Flüster: Aufnahme nach Gerätewechsel nicht fortsetzbar: %@", error.localizedDescription)
         }
-        guard let converter = converter else { return }
-        let ratio = target.sampleRate / buffer.format.sampleRate
-        let capacity = AVAudioFrameCount(Double(buffer.frameLength) * ratio + 64)
-        guard let out = AVAudioPCMBuffer(pcmFormat: target, frameCapacity: capacity) else { return }
+    }
+
+    private func teardown() {
+        if let o = configObserver {
+            NotificationCenter.default.removeObserver(o)
+            configObserver = nil
+        }
+        guard let engine else { return }
+        engine.inputNode.removeTap(onBus: 0)
+        engine.stop()
+        self.engine = nil
+    }
+
+    private func process(_ buffer: AVAudioPCMBuffer) {
+        let frames = Int(buffer.frameLength)
+        guard frames > 0, let data = buffer.floatChannelData else { return }
+        let count = Int(buffer.format.channelCount)
+        let interleaved = buffer.format.isInterleaved
+        let stride = buffer.stride
+        let channels: [[Float]] = (0..<count).map { c in
+            interleaved ? (0..<frames).map { data[0][$0 * stride + c] } : Array(UnsafeBufferPointer(start: data[c], count: frames))
+        }
+        let mono = AudioUtil.downmix(channels)
+        let lvl = mono.withUnsafeBufferPointer { AudioUtil.level($0) }
+        DispatchQueue.main.async { [weak self] in self?.onLevel?(lvl) }
+
+        let rate = buffer.format.sampleRate
+        lock.lock()
+        defer { lock.unlock() }
+        if rate == Self.sampleRate {
+            samples.append(contentsOf: mono)
+            return
+        }
+        guard let src = AVAudioFormat(commonFormat: .pcmFormatFloat32, sampleRate: rate, channels: 1, interleaved: false),
+              let target = AVAudioFormat(commonFormat: .pcmFormatFloat32, sampleRate: Self.sampleRate, channels: 1, interleaved: false) else { return }
+        // Neuer Wandler, wenn sich die Rate ändert (anderes Gerät nach einem Wechsel mitten im Diktat)
+        if converter?.inputFormat.sampleRate != rate { converter = AVAudioConverter(from: src, to: target) }
+        guard let converter = converter,
+              let inBuf = AVAudioPCMBuffer(pcmFormat: src, frameCapacity: AVAudioFrameCount(frames)),
+              let dst = inBuf.floatChannelData,
+              let out = AVAudioPCMBuffer(pcmFormat: target, frameCapacity: AVAudioFrameCount(Double(frames) * Self.sampleRate / rate + 64)) else { return }
+        inBuf.frameLength = AVAudioFrameCount(frames)
+        mono.withUnsafeBufferPointer { dst[0].update(from: $0.baseAddress!, count: frames) }
         let fed = Flag()
         var error: NSError?
         let status = converter.convert(to: out, error: &error) { _, inputStatus in
@@ -69,26 +163,21 @@ final class AudioRecorder {
             }
             fed.value = true
             inputStatus.pointee = .haveData
-            return buffer
+            return inBuf
         }
-        guard status != .error, let data = out.floatChannelData, out.frameLength > 0 else { return }
-        let chunk = UnsafeBufferPointer(start: data[0], count: Int(out.frameLength))
-        lock.lock()
-        samples.append(contentsOf: chunk)
-        lock.unlock()
+        guard status != .error, let result = out.floatChannelData, out.frameLength > 0 else { return }
+        samples.append(contentsOf: UnsafeBufferPointer(start: result[0], count: Int(out.frameLength)))
     }
 
     /// Stoppt und liefert die Aufnahme.
     func stop() -> (samples: [Float], seconds: Double) {
-        guard isRecording, let engine = engine else { return ([], 0) }
-        engine.inputNode.removeTap(onBus: 0)
-        engine.stop()
-        self.engine = nil
-        converter = nil
+        guard isRecording else { return ([], 0) }
+        teardown()
         isRecording = false
         lock.lock()
         let s = samples
         samples = []
+        converter = nil
         lock.unlock()
         return (s, Date().timeIntervalSince(startDate))
     }
@@ -109,7 +198,12 @@ enum AudioDevices {
         let name: String
     }
 
+    /// Kommt auf dem Main-Thread, wenn Geräte an- oder abgesteckt werden oder sich der Standard-Eingang ändert.
+    static let changed = Notification.Name("FluesterAudioDevicesChanged")
+
+    /// Eingänge mit mindestens einem Kanal – ohne verborgene und gerade verschwindende Geräte.
     static func inputs() -> [Device] {
+        startMonitoring()
         var addr = AudioObjectPropertyAddress(mSelector: kAudioHardwarePropertyDevices, mScope: kAudioObjectPropertyScopeGlobal,
                                               mElement: kAudioObjectPropertyElementMain)
         var size: UInt32 = 0
@@ -117,17 +211,64 @@ enum AudioDevices {
         var ids = [AudioDeviceID](repeating: 0, count: Int(size) / MemoryLayout<AudioDeviceID>.size)
         guard AudioObjectGetPropertyData(AudioObjectID(kAudioObjectSystemObject), &addr, 0, nil, &size, &ids) == noErr else { return [] }
         return ids.compactMap { id in
-            var streams = AudioObjectPropertyAddress(mSelector: kAudioDevicePropertyStreams, mScope: kAudioDevicePropertyScopeInput,
-                                                     mElement: kAudioObjectPropertyElementMain)
-            var sz: UInt32 = 0
-            guard AudioObjectGetPropertyDataSize(id, &streams, 0, nil, &sz) == noErr, sz > 0 else { return nil }
-            guard let uid = stringProperty(id, kAudioDevicePropertyDeviceUID), let name = stringProperty(id, kAudioObjectPropertyName) else { return nil }
+            guard inputChannels(id) > 0,
+                  (uint32Property(id, kAudioDevicePropertyDeviceIsAlive) ?? 1) != 0,
+                  (uint32Property(id, kAudioDevicePropertyIsHidden) ?? 0) == 0,
+                  let uid = stringProperty(id, kAudioDevicePropertyDeviceUID), let name = stringProperty(id, kAudioObjectPropertyName) else { return nil }
             return Device(id: id, uid: uid, name: name)
         }
     }
 
-    static func deviceID(forUID uid: String) -> AudioDeviceID? {
-        inputs().first { $0.uid == uid }?.id
+    /// Das gewählte Mikrofon – notfalls unter neuer UID wiedergefunden (anderer USB-Port oder Hub) –, sonst nil (Systemstandard).
+    static func resolve(uid: String, name: String) -> Device? {
+        guard !uid.isEmpty else { return nil }
+        let all = inputs()
+        guard let i = MicrophoneMatch.find(all.map { MicrophoneMatch.Candidate(uid: $0.uid, name: $0.name) }, uid: uid, name: name) else { return nil }
+        if all[i].uid != uid { NSLog("Flüster: Mikrofon „%@“ unter neuer UID wiedergefunden (anderer USB-Port oder Hub)", all[i].name) }
+        return all[i]
+    }
+
+    /// Aktueller Standard-Eingang des Systems.
+    static var defaultInput: Device? {
+        var addr = AudioObjectPropertyAddress(mSelector: kAudioHardwarePropertyDefaultInputDevice, mScope: kAudioObjectPropertyScopeGlobal,
+                                              mElement: kAudioObjectPropertyElementMain)
+        var id = AudioDeviceID(0)
+        var size = UInt32(MemoryLayout<AudioDeviceID>.size)
+        guard AudioObjectGetPropertyData(AudioObjectID(kAudioObjectSystemObject), &addr, 0, nil, &size, &id) == noErr, id != 0 else { return nil }
+        return inputs().first { $0.id == id }
+    }
+
+    private static var monitoring = false
+
+    /// Einmalig: bei An-/Abstecken und neuem Standard-Eingang `changed` senden, damit die Auswahl aktuell bleibt.
+    private static func startMonitoring() {
+        guard !monitoring else { return }
+        monitoring = true
+        for selector in [kAudioHardwarePropertyDevices, kAudioHardwarePropertyDefaultInputDevice] {
+            var addr = AudioObjectPropertyAddress(mSelector: selector, mScope: kAudioObjectPropertyScopeGlobal, mElement: kAudioObjectPropertyElementMain)
+            AudioObjectAddPropertyListenerBlock(AudioObjectID(kAudioObjectSystemObject), &addr, DispatchQueue.main) { _, _ in
+                NotificationCenter.default.post(name: changed, object: nil)
+            }
+        }
+    }
+
+    private static func inputChannels(_ id: AudioObjectID) -> Int {
+        var addr = AudioObjectPropertyAddress(mSelector: kAudioDevicePropertyStreamConfiguration, mScope: kAudioDevicePropertyScopeInput,
+                                              mElement: kAudioObjectPropertyElementMain)
+        var size: UInt32 = 0
+        guard AudioObjectGetPropertyDataSize(id, &addr, 0, nil, &size) == noErr, size > 0 else { return 0 }
+        let raw = UnsafeMutableRawPointer.allocate(byteCount: Int(size), alignment: MemoryLayout<AudioBufferList>.alignment)
+        defer { raw.deallocate() }
+        guard AudioObjectGetPropertyData(id, &addr, 0, nil, &size, raw) == noErr else { return 0 }
+        let list = UnsafeMutableAudioBufferListPointer(raw.assumingMemoryBound(to: AudioBufferList.self))
+        return list.reduce(0) { $0 + Int($1.mNumberChannels) }
+    }
+
+    private static func uint32Property(_ id: AudioObjectID, _ selector: AudioObjectPropertySelector) -> UInt32? {
+        var addr = AudioObjectPropertyAddress(mSelector: selector, mScope: kAudioObjectPropertyScopeGlobal, mElement: kAudioObjectPropertyElementMain)
+        var value: UInt32 = 0
+        var size = UInt32(MemoryLayout<UInt32>.size)
+        return AudioObjectGetPropertyData(id, &addr, 0, nil, &size, &value) == noErr ? value : nil
     }
 
     private static func stringProperty(_ id: AudioObjectID, _ selector: AudioObjectPropertySelector) -> String? {
