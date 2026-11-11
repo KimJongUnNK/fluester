@@ -28,6 +28,29 @@ public static class Paths
     public static string LogFile => Path.Combine(Data, "fluester.log");
 }
 
+/// <summary>Kaputte Dateien beiseitelegen, bevor sie mit Standardwerten überschrieben werden – sonst wären Wörterbuch,
+/// Textbausteine, Verlauf oder Schlüssel beim nächsten Speichern still weg.</summary>
+public static class Broken
+{
+    /// <summary>Kopie „datei.kaputt-JJJJMMTT-hhmmss“ anlegen. Liefert den Pfad oder null.</summary>
+    public static string? Keep(string file, string why)
+    {
+        try
+        {
+            if (!File.Exists(file)) return null;
+            var copy = $"{file}.kaputt-{DateTime.Now:yyyyMMdd-HHmmss}";
+            File.Copy(file, copy, overwrite: true);
+            Log.Write($"{Path.GetFileName(file)} nicht lesbar ({why}) – gesichert als {Path.GetFileName(copy)}, weiter mit Standardwerten");
+            return copy;
+        }
+        catch (Exception e)
+        {
+            Log.Write($"{Path.GetFileName(file)} nicht lesbar ({why}), Sichern fehlgeschlagen: {e.Message}");
+            return null;
+        }
+    }
+}
+
 /// <summary>Einfaches Protokoll (für Fehlersuche, max. ~1 MB).</summary>
 public static class Log
 {
@@ -60,16 +83,37 @@ public sealed class SettingsStore
     public SettingsStore(string? file = null)
     {
         this.file = file ?? Paths.SettingsFile;
-        current = File.Exists(this.file) ? Settings.FromJson(File.ReadAllText(this.file)) : new Settings();
+        current = Load(this.file);
     }
 
-    /// <summary>Datei neu einlesen (z. B. nach Bearbeitung von Hand).</summary>
+    /// <summary>Datei lesen. Kaputt oder nicht lesbar: Standardwerte, die alte Datei wird vorher gesichert.</summary>
+    static Settings Load(string file)
+    {
+        if (!File.Exists(file)) return new Settings();
+        string json;
+        try { json = File.ReadAllText(file); }
+        catch (Exception e) { Broken.Keep(file, e.Message); return new Settings(); }
+        if (Settings.TryFromJson(json, out var s)) return s;
+        Broken.Keep(file, "kein gültiges JSON");
+        return s;
+    }
+
+    /// <summary>Datei neu einlesen (z. B. nach Bearbeitung von Hand). Ist sie gerade kaputt (halb gespeichert, Tippfehler),
+    /// bleibt es bei den aktuellen Einstellungen statt bei Standardwerten.</summary>
     public void Reload()
     {
         Settings snapshot;
         lock (gate)
         {
-            current = File.Exists(file) ? Settings.FromJson(File.ReadAllText(file)) : new Settings();
+            if (!File.Exists(file)) current = new Settings();
+            else
+            {
+                string json;
+                try { json = File.ReadAllText(file); }
+                catch (Exception e) { Log.Write("Einstellungen neu lesen: " + e.Message); return; }
+                if (!Settings.TryFromJson(json, out var s)) { Log.Write("Einstellungen neu lesen: kein gültiges JSON – behalte die bisherigen"); return; }
+                current = s;
+            }
             snapshot = current.Clone();
         }
         Changed?.Invoke(snapshot);
@@ -113,9 +157,11 @@ public sealed class HistoryStore
         try
         {
             items = File.Exists(this.file) ? JsonSerializer.Deserialize<List<HistoryItem>>(File.ReadAllText(this.file), Json) ?? new() : new();
+            items.RemoveAll(i => i == null);
         }
-        catch (JsonException)
+        catch (Exception e) when (e is JsonException or IOException or UnauthorizedAccessException)
         {
+            Broken.Keep(this.file, e.Message);
             items = new();
         }
     }
@@ -188,8 +234,11 @@ public class FileSecretStore : ISecretStore
     protected virtual byte[] Protect(byte[] data) => data;
     protected virtual byte[] Unprotect(byte[] data) => data;
 
-    Dictionary<string, string> Load()
+    Dictionary<string, string> Load() => Load(out _);
+
+    Dictionary<string, string> Load(out bool broken)
     {
+        broken = false;
         try
         {
             if (!System.IO.File.Exists(File)) return new();
@@ -198,6 +247,7 @@ public class FileSecretStore : ISecretStore
         }
         catch
         {
+            broken = true;
             return new();
         }
     }
@@ -213,12 +263,25 @@ public class FileSecretStore : ISecretStore
     {
         lock (gate)
         {
-            var all = Load();
+            var all = Load(out bool broken);
+            // Nicht lesbar (z. B. anderes Windows-Konto): die übrigen Schlüssel nicht still überschreiben
+            if (broken) Broken.Keep(File, "Schlüsseldatei nicht lesbar");
             if (string.IsNullOrWhiteSpace(key)) all.Remove(providerId); else all[providerId] = key.Trim();
             var bytes = Protect(JsonSerializer.SerializeToUtf8Bytes(all));
             var tmp = File + ".tmp";
-            System.IO.File.WriteAllBytes(tmp, bytes);
-            if (!OperatingSystem.IsWindows()) System.IO.File.SetUnixFileMode(tmp, UnixFileMode.UserRead | UnixFileMode.UserWrite);
+            if (OperatingSystem.IsWindows()) System.IO.File.WriteAllBytes(tmp, bytes);
+            else
+            {
+                // Von Anfang an nur für den Nutzer lesbar – nicht erst anlegen und danach die Rechte ändern
+                System.IO.File.Delete(tmp);
+                using (var fs = new FileStream(tmp, new FileStreamOptions
+                       {
+                           Mode = FileMode.CreateNew, Access = FileAccess.Write,
+                           UnixCreateMode = UnixFileMode.UserRead | UnixFileMode.UserWrite,
+                       }))
+                    fs.Write(bytes);
+                System.IO.File.SetUnixFileMode(tmp, UnixFileMode.UserRead | UnixFileMode.UserWrite);
+            }
             System.IO.File.Move(tmp, File, overwrite: true);
         }
     }

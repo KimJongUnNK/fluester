@@ -167,21 +167,41 @@ sealed class KeyboardWatcher : IDisposable
     }
 }
 
-/// <summary>Erkennt die Diktat-Taste aus rohen Tastencodes. Andere Tasten während des Haltens → kein Diktat.</summary>
+/// <summary>Erkennt die Diktat-Taste aus rohen Tastencodes. Andere Tasten während des Haltens → kein Diktat.
+/// Threadsicher: Jede Tastatur liefert auf ihrem eigenen Lese-Thread, die Einstellungen kommen aus der Warteschlange.</summary>
 sealed class HotkeyTracker
 {
+    readonly object gate = new();
+
     public event Action<bool>? Pressed;
     public event Action? Released;
     public event Action? CommandModifier;
     public event Action? OtherKey;
     public event Action? Escape;
 
-    public HotkeyChoice Choice { get; set; } = HotkeyChoice.RightCtrl;
+    public HotkeyChoice Choice { get { lock (gate) return choice; } }
+    HotkeyChoice choice = HotkeyChoice.RightCtrl;
     bool hotkeyDown, ctrlDown, metaDown, shiftDown;
+
+    /// <summary>Andere Taste: Zustand zurücksetzen. Gleiche Taste: nichts tun – eine gerade gehaltene Taste bleibt gehalten.</summary>
+    public void SetChoice(HotkeyChoice c)
+    {
+        lock (gate)
+        {
+            if (c == choice) return;
+            choice = c;
+            hotkeyDown = ctrlDown = metaDown = shiftDown = false;
+        }
+    }
 
     public void Feed(ushort code, int value)
     {
         if (value == 2) return; // Wiederholung
+        lock (gate) FeedLocked(code, value);
+    }
+
+    void FeedLocked(ushort code, int value)
+    {
         bool down = value == 1;
         if (Keys.IsShift(code))
         {
@@ -189,7 +209,7 @@ sealed class HotkeyTracker
             shiftDown = down;
             return;
         }
-        if (Choice == HotkeyChoice.CtrlWin && (Keys.IsCtrl(code) || Keys.IsMeta(code)))
+        if (choice == HotkeyChoice.CtrlWin && (Keys.IsCtrl(code) || Keys.IsMeta(code)))
         {
             if (Keys.IsCtrl(code)) ctrlDown = down;
             if (Keys.IsMeta(code)) metaDown = down;
@@ -207,7 +227,7 @@ sealed class HotkeyTracker
         if (down && hotkeyDown) OtherKey?.Invoke();
     }
 
-    ushort HotkeyCode => Choice switch
+    ushort HotkeyCode => choice switch
     {
         HotkeyChoice.RightCtrl => Keys.RIGHTCTRL,
         HotkeyChoice.CapsLock => Keys.CAPSLOCK,
@@ -216,7 +236,10 @@ sealed class HotkeyTracker
         _ => 0,
     };
 
-    public void Reset() => hotkeyDown = ctrlDown = metaDown = shiftDown = false;
+    public void Reset()
+    {
+        lock (gate) hotkeyDown = ctrlDown = metaDown = shiftDown = false;
+    }
 }
 
 /// <summary>Virtuelle Tastatur über /dev/uinput: sendet Strg+V & Co. – unter X11 und Wayland, auf GNOME, KDE, Sway, Hyprland.</summary>

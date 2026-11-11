@@ -150,12 +150,13 @@ public static class ModelStore
         {
             using var resp = await Http.GetAsync(m.Url, HttpCompletionOption.ResponseHeadersRead, ct);
             if (!resp.IsSuccessStatusCode) throw new FluesterException($"Download fehlgeschlagen (HTTP {(int)resp.StatusCode})");
-            long total = resp.Content.Headers.ContentLength ?? m.SizeMB * 1_000_000L;
+            long? expected = resp.Content.Headers.ContentLength;
+            long total = expected ?? m.SizeMB * 1_000_000L;
+            long done = 0;
             await using (var src = await resp.Content.ReadAsStreamAsync(ct))
             await using (var dst = File.Create(tmp))
             {
                 var buf = new byte[1 << 16];
-                long done = 0;
                 int n;
                 var lastReport = DateTime.MinValue;
                 while ((n = await src.ReadAsync(buf, ct)) > 0)
@@ -169,7 +170,9 @@ public static class ModelStore
                     }
                 }
             }
-            if (new FileInfo(tmp).Length < 10_000_000) throw new FluesterException("Download unvollständig – bitte erneut versuchen");
+            // Verbindung mittendrin abgebrochen, ohne Fehler: ein halbes Modell lädt Whisper nicht oder liefert Unsinn
+            if (new FileInfo(tmp).Length < 10_000_000 || (expected is long size && done != size))
+                throw new FluesterException("Download unvollständig – bitte erneut versuchen");
             WhisperLocalEngine.Unload();
             File.Move(tmp, dest, overwrite: true);
             progress?.Report(1);

@@ -12,10 +12,15 @@ final class SettingsStore: ObservableObject {
     }
 
     private init() {
-        if let data = UserDefaults.standard.data(forKey: Self.key),
-           let decoded = try? JSONDecoder().decode(Settings.self, from: data) {
+        let data = UserDefaults.standard.data(forKey: Self.key)
+        if let data, let decoded = try? JSONDecoder().decode(Settings.self, from: data) {
             s = decoded
         } else {
+            if let data {
+                // Nicht lesbar: sichern, bevor das nächste Speichern Wörterbuch und Textbausteine mit Standardwerten überschreibt
+                UserDefaults.standard.set(data, forKey: Self.key + ".kaputt")
+                NSLog("Flüster: Einstellungen nicht lesbar – gesichert unter %@", Self.key + ".kaputt")
+            }
             s = Settings()
         }
     }
@@ -60,7 +65,15 @@ final class HistoryStore: ObservableObject {
         guard let data = try? Data(contentsOf: url) else { return }
         let dec = JSONDecoder()
         dec.dateDecodingStrategy = .iso8601
-        items = (try? dec.decode([HistoryItem].self, from: data)) ?? []
+        do {
+            items = try dec.decode([HistoryItem].self, from: data)
+        } catch {
+            // Nicht lesbar: sichern, bevor das nächste Diktat den Verlauf überschreibt
+            let backup = url.deletingLastPathComponent().appendingPathComponent("history.json.kaputt-\(Int(Date().timeIntervalSince1970))")
+            try? data.write(to: backup)
+            NSLog("Flüster: Verlauf nicht lesbar – gesichert als %@", backup.lastPathComponent)
+            items = []
+        }
     }
 
     private func save() {

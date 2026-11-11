@@ -178,8 +178,9 @@ sealed class Daemon : IDisposable
 
     void ApplySettings(Settings s)
     {
-        tracker.Choice = s.Hotkey;
-        tracker.Reset();
+        // Nur bei einer anderen Taste zurücksetzen: Jedes Speichern (z. B. ein umgestecktes Mikrofon beim Aufnahmestart)
+        // ließ sonst das Loslassen der gerade gehaltenen Taste verloren gehen – die Aufnahme lief weiter.
+        tracker.SetChoice(s.Hotkey);
         gestures.DoubleTapEnabled = s.HandsFreeDoubleTap;
         if (bar != null)
         {
@@ -370,7 +371,15 @@ sealed class Daemon : IDisposable
             else if (s.Notifications) Desktop.Notify("Nichts verstanden", "");
             return;
         }
-        bool inserted = Insert(result.Text, s, app);
+        var outcome = Insert(result.Text, s, app);
+        // Gar nicht eingefügt (Fehler schon gemeldet): nicht „In der Zwischenablage“ darüberschreiben – nur im Verlauf sichern
+        if (outcome == null)
+        {
+            if (s.KeepHistory)
+                history.Add(new HistoryItem { Raw = result.Raw, Text = result.Text, AppName = app.Name, AppId = app.Id, Seconds = seconds, IsCommand = result.IsCommand, Engine = result.Engine });
+            return;
+        }
+        bool inserted = outcome.Value;
         int words = result.Text.Split(' ', StringSplitOptions.RemoveEmptyEntries).Length;
         if (BarOk) bar!.Done(inserted ? (words == 1 ? "1 Wort" : $"{words} Wörter") : "In der Zwischenablage – Strg+V", inserted ? 1.4 : 3.5);
         Log.Write($"Diktat fertig nach {clock.Elapsed.TotalSeconds - processingSince:0.0} s: {result.Text.Split(' ', StringSplitOptions.RemoveEmptyEntries).Length} Wörter · {(inserted ? "eingefügt" : "in der Zwischenablage")} · {result.Engine}");
@@ -380,14 +389,23 @@ sealed class Daemon : IDisposable
         if (!inserted && !BarOk && s.Notifications) Desktop.Notify("In der Zwischenablage", "Mit Strg+V einfügen.");
     }
 
-    /// <summary>Text einfügen: Zwischenablage setzen, Strg+V (Terminals: Strg+Umschalt+V) über die virtuelle Tastatur, alte Zwischenablage zurück.</summary>
-    bool Insert(string text, Settings s, TargetApp app)
+    /// <summary>Text einfügen: Zwischenablage setzen, Strg+V (Terminals: Strg+Umschalt+V) über die virtuelle Tastatur, alte Zwischenablage zurück.
+    /// true = eingefügt, false = liegt in der Zwischenablage, null = ging gar nicht (Fehler ist gemeldet).</summary>
+    bool? Insert(string text, Settings s, TargetApp app)
     {
         if (s.InsertMethod == InsertMethod.Type && TryType(text)) return true;
         var backup = Desktop.GetClipboard();
         try { Desktop.SetClipboard(text); }
-        catch (Exception e) { Fail(e.Message); return false; }
+        catch (Exception e) { Fail(e.Message); return null; }
         Thread.Sleep(60);
+        // Hat das Setzen still nicht geklappt, würde Strg+V den alten Inhalt einfügen (womöglich ein Passwort)
+        if (Desktop.GetClipboard() is { } now && now.TrimEnd('\n', '\r') != text.TrimEnd('\n', '\r'))
+        {
+            Log.Write("Zwischenablage ließ sich nicht setzen – tippe stattdessen");
+            if (TryType(text)) return true;
+            Fail("Zwischenablage ließ sich nicht setzen – Text nicht eingefügt");
+            return null;
+        }
         var keys = s.PasteShortcut switch
         {
             "ctrl+v" => new[] { Keys.LEFTCTRL, Keys.V },
@@ -519,7 +537,12 @@ sealed class Daemon : IDisposable
             case "paste-last":
                 var last = history.Last;
                 if (last == null) return "kein Diktat im Verlauf";
-                return Insert(last.Text, store.Current, Desktop.ActiveWindow()) ? "eingefügt" : "in der Zwischenablage";
+                return Insert(last.Text, store.Current, Desktop.ActiveWindow()) switch
+                {
+                    true => "eingefügt",
+                    false => "in der Zwischenablage",
+                    null => "nicht eingefügt – Zwischenablage gesperrt",
+                };
             case "stop":
                 queue.CompleteAdding();
                 return "beendet";

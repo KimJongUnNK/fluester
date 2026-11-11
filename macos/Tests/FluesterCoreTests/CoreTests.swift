@@ -274,3 +274,27 @@ final class MicrophoneTests: XCTestCase {
         XCTAssertEqual(old.microphoneName, "")
     }
 }
+
+final class RobustnessTests: XCTestCase {
+    private func rules(_ s: String) -> String {
+        TextPipeline.ruleBased(s, options: CleanupOptions(style: .formal))
+    }
+
+    func testStuttersAcrossACommaOnlyAtTheStartOfAClause() {
+        // Zwei Teilsätze – das zweite „ich“ ist kein Stotterer
+        XCTAssertEqual(rules("Das glaube ich, ich bin sicher"), "Das glaube ich, ich bin sicher.")
+        XCTAssertEqual(rules("Das meine ich, ich meine es ernst"), "Das meine ich, ich meine es ernst.")
+        XCTAssertEqual(rules("Ich, ich wollte fragen"), "Ich wollte fragen.")
+        XCTAssertEqual(rules("Ähm, ich, ich wollte fragen"), "Ich wollte fragen.")
+        XCTAssertEqual(rules("Gut. Ich, ich wollte fragen"), "Gut. Ich wollte fragen.")
+        XCTAssertEqual(rules("wir wir müssen los"), "Wir müssen los.")
+    }
+
+    func testDictionaryEntryWithoutIDDoesNotWipeTheDictionary() throws {
+        let json = #"{"dictionary":[{"term":"Beeni"},{"id":"0E6C9D5B-7E0B-4C38-9D57-1D7C2B0F6A11","term":"Exodus","soundsLike":["exodos"]}],"snippets":[{"trigger":"adresse","text":"Musterweg 1"}]}"#
+        let s = try JSONDecoder().decode(Settings.self, from: json.data(using: .utf8)!)
+        XCTAssertEqual(s.dictionary.map(\.term), ["Beeni", "Exodus"])
+        XCTAssertEqual(s.dictionary[1].soundsLike, ["exodos"])
+        XCTAssertEqual(s.snippets.first?.text, "Musterweg 1")
+    }
+}

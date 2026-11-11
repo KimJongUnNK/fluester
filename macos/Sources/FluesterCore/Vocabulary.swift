@@ -13,6 +13,14 @@ public struct DictionaryEntry: Codable, Equatable, Identifiable, Hashable, Senda
         self.term = term
         self.soundsLike = soundsLike
     }
+
+    // Ein Eintrag ohne id/Varianten (von Hand ergänzt, ältere Version) darf nicht das ganze Wörterbuch unlesbar machen
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        id = (try? c.decodeIfPresent(UUID.self, forKey: .id)) ?? UUID()
+        term = (try? c.decodeIfPresent(String.self, forKey: .term)) ?? ""
+        soundsLike = (try? c.decodeIfPresent([String].self, forKey: .soundsLike)) ?? []
+    }
 }
 
 /// Textbaustein: gesprochenes Stichwort wird zu einem längeren Text.
@@ -27,6 +35,13 @@ public struct Snippet: Codable, Equatable, Identifiable, Hashable, Sendable {
         self.id = id
         self.trigger = trigger
         self.text = text
+    }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        id = (try? c.decodeIfPresent(UUID.self, forKey: .id)) ?? UUID()
+        trigger = (try? c.decodeIfPresent(String.self, forKey: .trigger)) ?? ""
+        text = (try? c.decodeIfPresent(String.self, forKey: .text)) ?? ""
     }
 }
 

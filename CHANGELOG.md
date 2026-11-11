@@ -2,6 +2,20 @@
 
 Alle wichtigen Änderungen an Flüster. Versionen folgen [Semantic Versioning](https://semver.org/lang/de/).
 
+## [Unveröffentlicht]
+
+Fehlersuche über die ganze App: Fixes für Tastenerkennung, Datenverlust, Zwischenablage und Textbereinigung.
+
+- **Windows und Linux – Loslassen ging verloren:** Speicherte Flüster beim Aufnahmestart etwas (z. B. den Mikrofon-Namen, beim ersten Diktat nach 1.3.1), vergaß es, dass die Taste gerade gehalten wird. Das Loslassen kam nicht an, die Aufnahme lief weiter, bis man nochmal drückte. Jetzt setzt nur ein Wechsel der Taste den Zustand zurück.
+- **Linux – Tastenerkennung threadsicher:** Mehrere Tastaturen (z. B. Laptop plus USB) melden auf eigenen Threads. Der Zustand der Diktat-Taste ist jetzt gegen gleichzeitige Zugriffe geschützt.
+- **Kein stiller Datenverlust mehr bei kaputten Dateien:** War `settings.json` (z. B. von Hand bearbeitet), der Verlauf oder die Schlüsseldatei nicht lesbar, startete Flüster mit Standardwerten und überschrieb beim nächsten Speichern Wörterbuch, Textbausteine, Verlauf bzw. API-Schlüssel. Jetzt wird die Datei vorher als `….kaputt-Datum` gesichert. Am Mac ebenso (Einstellungen unter `fluester.settings.v1.kaputt`). Liest der Linux-Dienst eine gerade halb gespeicherte Datei neu ein, behält er die bisherigen Einstellungen.
+- **Einzelne kaputte Einträge** (`null` im Wörterbuch, Eintrag ohne ID am Mac) machen nicht mehr das ganze Wörterbuch unlesbar und bringen Flüster nicht zum Absturz.
+- **Zwischenablage gesperrt (Windows) oder still nicht gesetzt (Linux):** Strg+V fügte dann den *alten* Inhalt ein, womöglich ein kopiertes Passwort. Jetzt tippt Flüster den Text stattdessen bzw. meldet den Fehler.
+- **Linux – Schlüsseldatei** ist von Anfang an nur für dich lesbar (vorher kurz für alle, bis die Rechte gesetzt waren).
+- **Abgebrochener Modell-Download** wird erkannt (Größe passt nicht), statt ein halbes Modell zu speichern. Windows, Linux und Mac.
+- **Zeitüberschreitung beim Lesen der Antwort** von Groq/OpenAI/Ollama zeigt jetzt „Zeitüberschreitung“ statt einer Systemmeldung.
+- **Textbereinigung:** „Das glaube ich, ich bin sicher“ wurde zu „Das glaube ich bin sicher“ – die Stotterer-Erkennung hat über ein Komma hinweg ein echtes Wort gelöscht. Über ein Komma hinweg gilt eine Wiederholung jetzt nur am Satzanfang als Stotterer („Ich, ich wollte …“).
+
 ## [1.3.1] – 2026-11-01
 
 Mikrofon-Auswahl verlässlich, vor allem mit USB-Mikros direkt am Rechner oder über einen Hub.
