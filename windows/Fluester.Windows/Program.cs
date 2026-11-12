@@ -12,6 +12,12 @@ static class Program
     static int Main(string[] args)
     {
         if (args.Contains("--selftest")) return SelfTest.Run();
+        // Für Tests: Paket an Ort und Stelle einspielen (wie der Knopf „Jetzt aktualisieren“)
+        if (args.Length >= 2 && args[0] == "--apply-update")
+        {
+            Updater.Start(args[1], restart: args.Contains("--restart"));
+            return 0;
+        }
 
         using var mutex = new Mutex(true, MutexName, out bool first);
         if (!first)

@@ -90,7 +90,7 @@ Das funktioniert genau wie auf dem Mac:
 
 ## Aktualisieren und entfernen
 
-**Aktualisieren:** den Installationsbefehl aus [Weg A](#weg-a-ein-befehl-empfohlen) nochmal ausführen. Einstellungen, Verlauf und Modelle bleiben erhalten.
+**Aktualisieren:** in Flüster **Einstellungen › Über › Nach Updates suchen › Jetzt aktualisieren**. Flüster lädt die neue Version, prüft sie, ersetzt den Programmordner an Ort und Stelle und startet neu – keine zweite Kopie. Oder den Installationsbefehl aus [Weg A](#weg-a-ein-befehl-empfohlen) nochmal ausführen. Einstellungen, Verlauf und Modelle bleiben erhalten.
 
 **Entfernen:** **Einstellungen › Apps › Installierte Apps › Flüster › Deinstallieren**. Oder in PowerShell:
 ```powershell

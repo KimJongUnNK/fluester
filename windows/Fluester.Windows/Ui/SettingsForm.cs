@@ -365,6 +365,57 @@ sealed class SettingsForm : Form
 
     // ───────────────────────── Über
 
+    /// <summary>„Nach Updates suchen“ → „Jetzt aktualisieren“: ersetzt diese Installation an Ort und Stelle und startet neu.</summary>
+    void UpdateRow(Card c)
+    {
+        var status = new Label { AutoSize = true, ForeColor = Theme.Secondary, Text = $"Installiert: {Updater.CurrentVersion}" };
+        var check = Theme.SecondaryButton("Nach Updates suchen");
+        var install = Theme.PrimaryButton("Jetzt aktualisieren");
+        install.Visible = false;
+        string? newer = null;
+        check.Click += async (_, _) =>
+        {
+            check.Enabled = false;
+            status.ForeColor = Theme.Secondary;
+            status.Text = "Suche …";
+            try
+            {
+                newer = await Updater.CheckAsync();
+                status.Text = newer == null ? $"✓ Aktuell ({Updater.CurrentVersion})" : $"Version {newer} ist da (du hast {Updater.CurrentVersion})";
+                status.ForeColor = newer == null ? Theme.Good : Theme.Text;
+                install.Visible = newer != null;
+            }
+            catch (Exception e)
+            {
+                status.Text = "Konnte nicht prüfen: " + e.Message;
+                status.ForeColor = Theme.Warn;
+            }
+            finally { check.Enabled = true; }
+        };
+        install.Click += async (_, _) =>
+        {
+            if (newer == null) return;
+            install.Enabled = check.Enabled = false;
+            status.ForeColor = Theme.Secondary;
+            var progress = new Progress<double>(p => status.Text = $"Lade {newer} … {(int)(p * 100)} %");
+            try
+            {
+                await Updater.DownloadAndStartAsync(newer, progress);
+                status.Text = "Installiere – Flüster startet gleich neu …";
+                await Task.Delay(400);
+                TrayApp.Instance?.ExitThread();
+            }
+            catch (Exception e)
+            {
+                Log.Write("Update: " + e);
+                status.Text = "Aktualisieren fehlgeschlagen: " + e.Message;
+                status.ForeColor = Theme.Warn;
+                install.Enabled = check.Enabled = true;
+            }
+        };
+        c.Row("Update", Controls2.Line(check, install, status), "Ersetzt diese Installation – keine zweite Kopie. Einstellungen, Verlauf und Modelle bleiben.");
+    }
+
     void AboutPage(PageBuilder pb)
     {
         var version = typeof(SettingsForm).Assembly.GetName().Version?.ToString(3) ?? "dev";
@@ -374,6 +425,7 @@ sealed class SettingsForm : Form
             Controls2.Link("Auf GitHub", "https://github.com/KimJongUnNK/fluester"),
             Controls2.Link("Neueste Version", "https://github.com/KimJongUnNK/fluester/releases/latest"),
             Controls2.Link("Hilfe", "https://github.com/KimJongUnNK/fluester/blob/main/docs/windows.md#häufige-probleme")));
+        UpdateRow(c);
         var folder = Theme.SecondaryButton("Datenordner öffnen");
         folder.Click += (_, _) => Controls2.Open(Paths.Data);
         var log = Theme.SecondaryButton("Protokoll öffnen");

@@ -4,7 +4,9 @@ Alle wichtigen Änderungen an Flüster. Versionen folgen [Semantic Versioning](h
 
 ## [Unveröffentlicht]
 
-Fehlersuche über die ganze App: Fixes für Tastenerkennung, Datenverlust, Zwischenablage und Textbereinigung.
+Update-Knopf am Mac und unter Windows, dazu Fehlersuche über die ganze App: Fixes für Tastenerkennung, Datenverlust, Zwischenablage und Textbereinigung.
+
+- **Update-Knopf (Mac und Windows):** Einstellungen › Über Flüster › „Nach Updates suchen“ › „Jetzt aktualisieren“. Flüster lädt die neue Version, prüft sie (SHA-256 aus dem Release, am Mac zusätzlich die Signatur), ersetzt die App bzw. den Programmordner genau dort, wo sie liegen, und startet neu. Keine zweite Kopie mehr. Geht etwas schief, bleibt die alte Version. Linux hatte den Knopf schon.
 
 - **Windows und Linux – Loslassen ging verloren:** Speicherte Flüster beim Aufnahmestart etwas (z. B. den Mikrofon-Namen, beim ersten Diktat nach 1.3.1), vergaß es, dass die Taste gerade gehalten wird. Das Loslassen kam nicht an, die Aufnahme lief weiter, bis man nochmal drückte. Jetzt setzt nur ein Wechsel der Taste den Zustand zurück.
 - **Linux – Tastenerkennung threadsicher:** Mehrere Tastaturen (z. B. Laptop plus USB) melden auf eigenen Threads. Der Zustand der Diktat-Taste ist jetzt gegen gleichzeitige Zugriffe geschützt.

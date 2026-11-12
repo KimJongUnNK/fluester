@@ -298,3 +298,33 @@ final class RobustnessTests: XCTestCase {
         XCTAssertEqual(s.snippets.first?.text, "Musterweg 1")
     }
 }
+
+final class UpdatesTests: XCTestCase {
+    func testIsNewer() {
+        XCTAssertTrue(Updates.isNewer("1.3.2", than: "1.3.1"))
+        XCTAssertTrue(Updates.isNewer("1.10.0", than: "1.9.9"))      // Zahlen, nicht Text
+        XCTAssertTrue(Updates.isNewer("v2.0.0", than: "1.3.1"))
+        XCTAssertTrue(Updates.isNewer("1.3.1", than: "0.0.214"))     // CI-Bauten
+        XCTAssertFalse(Updates.isNewer("1.3.1", than: "1.3.1"))
+        XCTAssertFalse(Updates.isNewer("1.3.0", than: "1.3.1"))
+        XCTAssertFalse(Updates.isNewer("1.3", than: "1.3.0"))
+        XCTAssertFalse(Updates.isNewer("kaputt", than: "1.0.0"))
+        XCTAssertFalse(Updates.isNewer(nil, than: "1.0.0"))
+        XCTAssertFalse(Updates.isNewer("1.0.0", than: "dev"))
+    }
+
+    func testParseLatest() {
+        XCTAssertEqual(Updates.parseLatest(#"{"tag_name":"v1.3.1"}"#.data(using: .utf8)!), "1.3.1")
+        XCTAssertNil(Updates.parseLatest(#"{"message":"API rate limit exceeded"}"#.data(using: .utf8)!))
+        XCTAssertNil(Updates.parseLatest(#"{"tag_name":"nightly"}"#.data(using: .utf8)!))
+        XCTAssertNil(Updates.parseLatest("<html>".data(using: .utf8)!))
+    }
+
+    func testChecksum() {
+        let a = String(repeating: "a", count: 64), b = String(repeating: "B", count: 64)
+        let sums = "\(a)  Fluester-macOS.zip\n\(b) *Fluester-Windows-x64.zip\r\nkaputt Fluester-Linux-x64.tar.gz\n"
+        XCTAssertEqual(Updates.checksum(in: sums, for: "Fluester-macOS.zip"), a)
+        XCTAssertEqual(Updates.checksum(in: sums, for: "Fluester-Windows-x64.zip"), b.lowercased())
+        XCTAssertNil(Updates.checksum(in: sums, for: "Fluester-Linux-x64.tar.gz"))
+    }
+}
