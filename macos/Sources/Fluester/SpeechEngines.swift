@@ -444,6 +444,13 @@ final class ModelDownloader: NSObject, ObservableObject, URLSessionDownloadDeleg
             DispatchQueue.main.async { self.error = "Download fehlgeschlagen (HTTP \(status))" }
             return
         }
+        // Verbindung mittendrin abgebrochen, ohne Fehler: ein halbes Modell startet whisper-server nicht
+        let expected = downloadTask.countOfBytesExpectedToReceive
+        let size = (try? FileManager.default.attributesOfItem(atPath: location.path)[.size] as? NSNumber)?.int64Value ?? 0
+        if size < 10_000_000 || (expected > 0 && size != expected) {
+            DispatchQueue.main.async { self.error = "Download unvollständig – bitte erneut versuchen" }
+            return
+        }
         let dest = WhisperServer.modelURL(model)
         try? FileManager.default.removeItem(at: dest)
         do {

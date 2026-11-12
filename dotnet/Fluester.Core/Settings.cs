@@ -176,14 +176,22 @@ public sealed class Settings
 
     public string ToJson() => JsonSerializer.Serialize(this, Json);
 
-    public static Settings FromJson(string? json)
+    public static Settings FromJson(string? json) => TryFromJson(json, out var s) ? s : new Settings();
+
+    /// <summary>false, wenn die Datei nicht lesbar ist (z. B. von Hand kaputt bearbeitet) – dann sind es die Standardwerte,
+    /// und der Aufrufer sichert die alte Datei, bevor sie überschrieben wird.</summary>
+    public static bool TryFromJson(string? json, out Settings settings)
     {
-        if (string.IsNullOrWhiteSpace(json)) return new Settings();
+        settings = new Settings();
+        if (string.IsNullOrWhiteSpace(json)) return true;
         try
         {
             var s = JsonSerializer.Deserialize<Settings>(json, Json) ?? new Settings();
-            s.Dictionary ??= new();
-            s.Snippets ??= new();
+            // Einzelne kaputte Einträge („null“) nicht bis zum Absturz mitschleppen
+            s.Dictionary = (s.Dictionary ?? new()).Where(d => d != null).ToList();
+            s.Snippets = (s.Snippets ?? new()).Where(n => n != null).ToList();
+            foreach (var d in s.Dictionary) { d.Term ??= ""; d.SoundsLike = (d.SoundsLike ?? new()).Where(v => v != null).ToList(); }
+            foreach (var n in s.Snippets) { n.Trigger ??= ""; n.Text ??= ""; }
             s.Styles ??= new();
             s.Styles.Overrides ??= new();
             s.CloudTranscription ??= new Settings().CloudTranscription;
@@ -192,11 +200,19 @@ public sealed class Settings
             s.MicrophoneId ??= "";
             s.MicrophoneName ??= "";
             s.PasteShortcut ??= "auto";
-            return s;
+            s.WhisperModelId ??= "turbo-q5";
+            s.CloudTranscription.BaseUrl ??= "";
+            s.CloudTranscription.Model ??= "";
+            s.CloudTranscription.ProviderId ??= "groq";
+            s.CloudChat.BaseUrl ??= "";
+            s.CloudChat.Model ??= "";
+            s.CloudChat.ProviderId ??= "groq";
+            settings = s;
+            return true;
         }
         catch (JsonException)
         {
-            return new Settings();
+            return false;
         }
     }
 

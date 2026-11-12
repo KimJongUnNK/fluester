@@ -102,7 +102,8 @@ static class SelfTest
         Check(mine != null, "als Eingabegerät sichtbar: " + (mine?.Path ?? "nein"), required);
         if (mine == null) return;
         using var watcher = new KeyboardWatcher { IncludeVirtual = true };
-        var tracker = new HotkeyTracker { Choice = HotkeyChoice.RightCtrl };
+        var tracker = new HotkeyTracker();
+        tracker.SetChoice(HotkeyChoice.RightCtrl);
         bool pressed = false, released = false, other = false;
         tracker.Pressed += _ => pressed = true;
         tracker.Released += () => released = true;

@@ -287,6 +287,26 @@ jobs:
           & .\scripts\install.ps1 -Uninstall
           if (Test-Path $exe) { throw 'nicht entfernt' }
 
+      - name: Update aus der App (an Ort und Stelle ersetzen, keine zweite Kopie)
+        shell: pwsh
+        run: |
+          $app = Join-Path $env:RUNNER_TEMP 'Fluester-alt'
+          Copy-Item dist\win-x64 $app -Recurse
+          Set-Content (Join-Path $app 'nur-in-alter-version.txt') 'alt'
+          $work = Join-Path $env:RUNNER_TEMP 'fluester-update-test'
+          New-Item -ItemType Directory $work | Out-Null
+          Copy-Item dist\Fluester-Windows-x64.zip $work
+          Start-Process -FilePath (Join-Path $app 'Fluester.exe') -ArgumentList '--apply-update', (Join-Path $work 'Fluester-Windows-x64.zip') -Wait
+          # Das Skript räumt am Ende seinen Arbeitsordner weg
+          for ($i = 0; $i -lt 120 -and (Test-Path $work); $i++) { Start-Sleep -Milliseconds 500 }
+          Get-Content "$env:LOCALAPPDATA\Fluester\fluester.log" -Tail 6 -Encoding UTF8
+          if (Test-Path $work) { throw 'Update-Skript ist nicht fertig geworden' }
+          if (-not (Select-String -Path "$env:LOCALAPPDATA\Fluester\fluester.log" -Pattern 'Update: fertig' -Quiet)) { throw 'Update meldet keinen Erfolg' }
+          if (Test-Path (Join-Path $app 'nur-in-alter-version.txt')) { throw 'Ordner wurde nicht ersetzt' }
+          if (-not (Test-Path (Join-Path $app 'Fluester.exe'))) { throw 'Fluester.exe fehlt nach dem Update' }
+          if (Test-Path "$app.alt") { throw 'alter Ordner liegt noch da' }
+          Write-Host 'OK an Ort und Stelle ersetzt, keine zweite Kopie'
+
       - uses: actions/upload-artifact@v4
         with:
           name: Fluester-Windows

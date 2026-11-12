@@ -146,6 +146,18 @@ public enum TextPipeline {
     static let doubleOK: Set<String> = ["der", "die", "das", "den", "dem", "des", "had", "that", "sie", "is", "es", "ja", "nein", "no", "so",
                                          "na", "ha", "haha", "bye", "very", "sehr", "yeah", "tschüss", "danke", "bitte", "gut", "mal"]
 
+    /// Steht vor `index` nur Leerraum seit Textanfang oder einem Satz-/Teilsatzzeichen?
+    static func atClauseStart(_ text: String, _ index: String.Index) -> Bool {
+        var i = index
+        while i > text.startIndex {
+            let prev = text.index(before: i)
+            let c = text[prev]
+            if c == " " || c == "\t" || c == "\u{00A0}" { i = prev; continue }
+            return ".!?,;:\n\"„“«»(–-".contains(c)
+        }
+        return true
+    }
+
     public static func removeStutters(_ text: String) -> String {
         guard let re = try? NSRegularExpression(pattern: "(?<![\\p{L}\\p{N}])(\\p{L}+)((?:[ ,]+\\1)+)(?![\\p{L}\\p{N}])", options: [.caseInsensitive]) else { return text }
         var result = ""
@@ -155,6 +167,8 @@ public enum TextPipeline {
             let word = String(text[w])
             let repeats = text[rep].split(whereSeparator: { $0 == " " || $0 == "," }).count
             if doubleOK.contains(word.lowercased()) && repeats < 2 { continue }
+            // Über ein Komma hinweg nur am Satz-/Teilsatzanfang: „Das glaube ich, ich bin sicher“ sind zwei Teilsätze
+            if text[rep].contains(",") && !atClauseStart(text, r.lowerBound) { continue }
             result += text[last..<r.lowerBound]
             result += word
             last = r.upperBound

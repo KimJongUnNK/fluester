@@ -76,6 +76,25 @@ jobs:
           bash scripts/install.sh --uninstall
           test ! -e "/Applications/Flüster.app"
 
+      - name: Update aus der App (an Ort und Stelle ersetzen, keine zweite Kopie)
+        working-directory: .
+        run: |
+          T="$RUNNER_TEMP/update-test"; mkdir -p "$T"
+          ditto "macos/build/Flüster.app" "$T/Flüster.app"
+          echo alt > "$T/Flüster.app/Contents/Resources/nur-in-alter-version.txt"
+          LOG="$HOME/Library/Application Support/Fluester/update.log"; rm -f "$LOG"
+          "$T/Flüster.app/Contents/MacOS/Fluester" --apply-update macos/build/Fluester-macOS.zip
+          for _ in $(seq 60); do grep -q "Update:" "$LOG" 2>/dev/null && break; sleep 1; done
+          cat "$LOG"
+          grep -q "Update: fertig" "$LOG"
+          test ! -e "$T/Flüster.app/Contents/Resources/nur-in-alter-version.txt"
+          test -x "$T/Flüster.app/Contents/MacOS/Fluester"
+          test ! -e "$T/Flüster.app.alt"
+          [ "$(find "$T" -maxdepth 1 -name '*.app' | wc -l | tr -d ' ')" = 1 ]
+          codesign --verify "$T/Flüster.app"
+          sleep 3; pkill -x Fluester || true
+          echo "✓ an Ort und Stelle ersetzt, keine zweite Kopie"
+
       - uses: actions/upload-artifact@v4
         with:
           name: Fluester-macOS

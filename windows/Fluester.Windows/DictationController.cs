@@ -66,8 +66,13 @@ sealed class DictationController : IDisposable
 
     void ApplySettings(Settings s)
     {
-        hook.Choice = s.Hotkey;
-        hook.Reset();
+        // Nur bei einer anderen Taste zurücksetzen: Jedes Speichern (z. B. der Mikrofon-Name beim Aufnahmestart)
+        // ließ sonst das Loslassen der gerade gehaltenen Taste verloren gehen – die Aufnahme lief weiter.
+        if (hook.Choice != s.Hotkey)
+        {
+            hook.Choice = s.Hotkey;
+            hook.Reset();
+        }
         gestures.DoubleTapEnabled = s.HandsFreeDoubleTap;
         Sounds.Enabled = s.Sounds;
         Bar.ShowWhenIdle = s.ShowIdleBar;

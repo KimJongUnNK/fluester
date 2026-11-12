@@ -151,7 +151,9 @@ Unter **Einstellungen › Stile** wählst du pro App-Gruppe einen Stil: **Formel
 
 ## Aktualisieren
 
-Den Installationsbefehl einfach nochmal ausführen:
+In Flüster: **Einstellungen › Über Flüster › Nach Updates suchen › Jetzt aktualisieren**. Flüster lädt die neue Version, prüft sie, ersetzt die App genau dort, wo sie liegt, und startet neu. Es entsteht keine zweite Kopie. Liegt die App in `/Programme` und dir fehlen dort Schreibrechte, fragt macOS nach dem Passwort.
+
+Oder den Installationsbefehl nochmal ausführen:
 ```bash
 curl -fsSL https://raw.githubusercontent.com/KimJongUnNK/fluester/main/scripts/install.sh | bash
 ```

@@ -150,7 +150,9 @@ public static class TextPipeline
         "na", "ha", "haha", "bye", "very", "sehr", "yeah", "tschüss", "danke", "bitte", "gut", "mal",
     };
 
-    /// <summary>Stotterer: „ich ich wollte“ → „ich wollte“. Artikel erst ab dreifacher Wiederholung.</summary>
+    /// <summary>Stotterer: „ich ich wollte“ → „ich wollte“. Artikel erst ab dreifacher Wiederholung.
+    /// Über ein Komma hinweg nur am Satz- bzw. Teilsatzanfang („Ich, ich wollte“) – „Das glaube ich, ich bin sicher“
+    /// sind zwei Teilsätze, da fehlte sonst ein Wort.</summary>
     public static string RemoveStutters(string text)
     {
         var re = Text.Re(@"(?<![\p{L}\p{N}])(\p{L}+)((?:[ ,]+\1)+)(?![\p{L}\p{N}])");
@@ -161,12 +163,21 @@ public static class TextPipeline
             var word = m.Groups[1].Value;
             int repeats = m.Groups[2].Value.Split(new[] { ' ', ',' }, StringSplitOptions.RemoveEmptyEntries).Length;
             if (DoubleOk.Contains(word.ToLowerInvariant()) && repeats < 2) continue;
+            if (m.Groups[2].Value.Contains(',') && !AtClauseStart(text, m.Index)) continue;
             sb.Append(text, last, m.Index - last);
             sb.Append(word);
             last = m.Index + m.Length;
         }
         sb.Append(text, last, text.Length - last);
         return sb.ToString();
+    }
+
+    /// <summary>Steht vor <paramref name="index"/> nur Leerraum seit Textanfang oder einem Satz-/Teilsatzzeichen?</summary>
+    static bool AtClauseStart(string text, int index)
+    {
+        int i = index - 1;
+        while (i >= 0 && Text.IsHSpace(text[i])) i--;
+        return i < 0 || ".!?,;:\n\"„“«»(–-".Contains(text[i]);
     }
 
     // ───────────────────────── Gesprochene Befehle

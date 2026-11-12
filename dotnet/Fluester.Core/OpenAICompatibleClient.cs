@@ -96,12 +96,16 @@ public sealed class OpenAICompatibleClient(string baseUrl, string? apiKey, TimeS
 
     async Task<string> SendAsync(HttpRequestMessage req, CancellationToken ct)
     {
+        using var request = req;
         using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
         cts.CancelAfter(Timeout);
-        HttpResponseMessage resp;
         try
         {
-            resp = await Http.SendAsync(req, cts.Token);
+            using var resp = await Http.SendAsync(request, cts.Token);
+            // Auch das Lesen der Antwort zählt zur Zeitgrenze (langsame Server schicken erst die Kopfzeilen)
+            var text = await resp.Content.ReadAsStringAsync(cts.Token);
+            if (!resp.IsSuccessStatusCode) throw new FluesterException(Describe((int)resp.StatusCode, text));
+            return text;
         }
         catch (OperationCanceledException) when (!ct.IsCancellationRequested)
         {
@@ -111,9 +115,6 @@ public sealed class OpenAICompatibleClient(string baseUrl, string? apiKey, TimeS
         {
             throw new FluesterException("Server nicht erreichbar: " + e.Message);
         }
-        var text = await resp.Content.ReadAsStringAsync(cts.Token);
-        if (!resp.IsSuccessStatusCode) throw new FluesterException(Describe((int)resp.StatusCode, text));
-        return text;
     }
 
     public static string Describe(int status, string body)

@@ -756,7 +756,42 @@ struct PermissionRow: View {
 
 // MARK: - Über
 
+/// „Nach Updates suchen“ → „Jetzt aktualisieren“: ersetzt diese App an Ort und Stelle und öffnet sie neu.
+struct UpdateBox: View {
+    @ObservedObject var updater: AppUpdater
+
+    var body: some View {
+        VStack(spacing: 8) {
+            switch updater.phase {
+            case .idle:
+                Button("Nach Updates suchen") { updater.check() }
+            case .checking:
+                ProgressView().controlSize(.small)
+                Text("Suche …").foregroundStyle(.secondary)
+            case .upToDate:
+                Label("Aktuell (\(AppUpdater.currentVersion))", systemImage: "checkmark.circle.fill").foregroundStyle(.green)
+                Button("Erneut suchen") { updater.check() }
+            case .available(let version):
+                Text("Version \(version) ist da (du hast \(AppUpdater.currentVersion))")
+                Button("Jetzt aktualisieren") { updater.install(version) }.buttonStyle(.borderedProminent)
+            case .downloading:
+                ProgressView().controlSize(.small)
+                Text("Lade und prüfe …").foregroundStyle(.secondary)
+            case .installing:
+                Text("Installiere – Flüster startet gleich neu …").foregroundStyle(.secondary)
+            case .failed(let message):
+                Text(message).font(.caption).foregroundStyle(.red).multilineTextAlignment(.center)
+                Button("Erneut versuchen") { updater.check() }
+            }
+            Text("Ersetzt diese App – keine zweite Kopie. Einstellungen, Verlauf und Modelle bleiben.\nDanach Bedienungshilfen einmal neu erlauben (neue Signatur).")
+                .font(.caption).foregroundStyle(.secondary).multilineTextAlignment(.center)
+        }
+    }
+}
+
 struct AboutPane: View {
+    @ObservedObject private var updater = AppUpdater.shared
+
     var body: some View {
         VStack(spacing: 14) {
             Image(nsImage: NSApp.applicationIconImage).resizable().frame(width: 96, height: 96)
@@ -770,6 +805,7 @@ struct AboutPane: View {
                 Link("Neueste Version", destination: URL(string: "https://github.com/KimJongUnNK/fluester/releases/latest")!)
                 Link("Hilfe", destination: URL(string: "https://github.com/KimJongUnNK/fluester/blob/main/docs/macos.md#h%C3%A4ufige-probleme")!)
             }
+            UpdateBox(updater: updater)
             Divider().frame(width: 260)
             Text("Spracherkennung: Apple Speech, whisper.cpp (MIT) oder OpenAI-kompatible APIs.\nBereinigung: Apple Intelligence, OpenAI-kompatible APIs oder Regeln.\nKein Code von Wispr Flow – eigener Nachbau.")
                 .font(.caption).foregroundStyle(.secondary).multilineTextAlignment(.center)

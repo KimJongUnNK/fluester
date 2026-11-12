@@ -79,7 +79,14 @@ static class TextInserter
     static void Paste(string text)
     {
         var backup = ClipboardBackup.Take();
-        SetClipboardText(text);
+        if (!SetClipboardText(text))
+        {
+            // Zwischenablage gerade von einer anderen App gesperrt: Strg+V würde den alten Inhalt einfügen
+            // (womöglich ein kopiertes Passwort) – stattdessen tippen
+            Fluester.Engine.Log.Write("Zwischenablage gesperrt – tippe den Text stattdessen");
+            TypeText(text);
+            return;
+        }
         Send(Key(VK_CONTROL, false), Key(VK_V, false), Key(VK_V, true), Key(VK_CONTROL, true));
         // Alte Zwischenablage zurück, wenn die App eingefügt hat
         var restore = new System.Windows.Forms.Timer { Interval = 600 };
@@ -134,13 +141,16 @@ static class TextInserter
         return string.IsNullOrWhiteSpace(text) ? null : text;
     }
 
-    public static void SetClipboardText(string text)
+    /// <summary>false, wenn die Zwischenablage auch nach mehreren Versuchen gesperrt war.</summary>
+    public static bool SetClipboardText(string text)
     {
-        for (int i = 0; i < 5; i++)
+        for (int i = 0; i < 8; i++)
         {
-            try { System.Windows.Forms.Clipboard.SetText(text); return; }
+            try { System.Windows.Forms.Clipboard.SetText(text); return true; }
             catch (System.Runtime.InteropServices.ExternalException) { Thread.Sleep(40); }
         }
+        Fluester.Engine.Log.Write("Zwischenablage gesperrt – Text konnte nicht abgelegt werden");
+        return false;
     }
 
     static string? TryGetClipboardText()

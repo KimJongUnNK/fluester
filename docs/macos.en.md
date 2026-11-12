@@ -112,7 +112,7 @@ Then go to **Einstellungen › Erkennung**, choose **"Whisper lokal (whisper.cpp
 
 ## Update
 
-Run the install command again. Afterwards, re-allow **Accessibility** once, because every build has a new signature.
+In Flüster: **Einstellungen › Über Flüster › „Nach Updates suchen“ › „Jetzt aktualisieren“** (settings, about, check for updates, update now). It replaces the app in place, no second copy. Or run the install command again. Afterwards, re-allow **Accessibility** once, because every build has a new signature.
 
 ## Uninstall
 
