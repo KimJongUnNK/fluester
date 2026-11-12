@@ -2,7 +2,7 @@
 
 Alle wichtigen Änderungen an Flüster. Versionen folgen [Semantic Versioning](https://semver.org/lang/de/).
 
-## [Unveröffentlicht]
+## [1.3.2] – 2026-11-12
 
 Update-Knopf am Mac und unter Windows, dazu Fehlersuche über die ganze App: Fixes für Tastenerkennung, Datenverlust, Zwischenablage und Textbereinigung.
 
