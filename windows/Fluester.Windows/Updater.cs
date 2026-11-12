@@ -41,7 +41,8 @@ static class Updater
         {
             UseShellExecute = false,
             CreateNoWindow = true,
-            WorkingDirectory = work,
+            // Nicht im Arbeitsordner starten – Windows löscht keinen Ordner, der Arbeitsverzeichnis eines Prozesses ist
+            WorkingDirectory = Path.GetTempPath(),
         };
         foreach (var a in new[] { "-NoProfile", "-ExecutionPolicy", "Bypass", "-WindowStyle", "Hidden", "-File", script,
                      "-ProcessId", Environment.ProcessId.ToString(), "-Zip", Path.GetFullPath(zip), "-Dir", AppDir,
@@ -56,6 +57,7 @@ static class Updater
     const string ApplyScript = """
         param([int]$ProcessId, [string]$Zip, [string]$Dir, [string]$LogFile, [string]$Restart = '1')
         $ErrorActionPreference = 'Stop'
+        Set-Location ([IO.Path]::GetTempPath())
         function Log($m) { try { Add-Content -Path $LogFile -Value ((Get-Date -Format 'yyyy-MM-dd HH:mm:ss') + ' Update: ' + $m) } catch { } }
         $work = Split-Path $Zip -Parent
         $old = "$Dir.alt"
