@@ -290,6 +290,47 @@ final class RobustnessTests: XCTestCase {
         XCTAssertEqual(rules("wir wir müssen los"), "Wir müssen los.")
     }
 
+    private func heard(_ s: String) -> String {
+        TextPipeline.ruleBased(TextPipeline.stripHallucinations(s), options: CleanupOptions(style: .formal))
+    }
+
+    func testRealSentencesAreNotMistakenForHallucinations() {
+        XCTAssertEqual(heard("Danke dir, bis zum nächsten Mal"), "Danke dir, bis zum nächsten Mal.")
+        XCTAssertEqual(heard("Viel Erfolg. Bis zum nächsten Mal."), "Viel Erfolg. Bis zum nächsten Mal.")
+        XCTAssertEqual(heard("Bis zum nächsten Mal."), "")
+        XCTAssertEqual(heard("Das Meeting war gut. Vielen Dank fürs Zuschauen."), "Das Meeting war gut.")
+        XCTAssertEqual(heard("Ich sagte am Ende vielen Dank fürs Zuschauen und ging"), "Ich sagte am Ende vielen Dank fürs Zuschauen und ging.")
+        XCTAssertEqual(heard("Untertitel der Amara.org-Community"), "")
+        XCTAssertEqual(heard("Das kostet 5 * 3 * 2 Euro"), "Das kostet 5 * 3 * 2 Euro.")
+        XCTAssertEqual(heard("Er *lacht* nickt kurz"), "Er nickt kurz.")
+    }
+
+    func testSpokenCommandsAreContentAfterAnArticle() {
+        XCTAssertEqual(rules("Die neue Zeile im Code ist falsch"), "Die neue Zeile im Code ist falsch.")
+        XCTAssertEqual(rules("Wir brauchen einen neuen Absatz im Vertrag"), "Wir brauchen einen neuen Absatz im Vertrag.")
+        XCTAssertEqual(rules("Hallo Lisa, neue Zeile, wie geht es dir"), "Hallo Lisa\nWie geht es dir.")
+        XCTAssertEqual(rules("erster Teil neuer Absatz zweiter Teil"), "Erster Teil\n\nZweiter Teil")
+        let spoken = CleanupOptions(spokenPunctuation: true, style: .formal)
+        XCTAssertEqual(TextPipeline.ruleBased("Der Punkt ist wichtig und das Komma auch", options: spoken), "Der Punkt ist wichtig und das Komma auch.")
+        XCTAssertEqual(TextPipeline.ruleBased("Hallo Komma wie geht es dir Fragezeichen", options: spoken), "Hallo, wie geht es dir?")
+    }
+
+    func testSelfCorrectionsAndListsAvoidFalsePositives() {
+        XCTAssertEqual(rules("Bitte lies den Text, korrigiere Fehler"), "Bitte lies den Text, korrigiere Fehler.")
+        XCTAssertEqual(rules("Das ist gut, sorry, ich meine schlecht"), "Das ist schlecht.")
+        XCTAssertEqual(rules("Schreib an Paul, oder besser an Peter"), "Schreib an Peter.")
+        XCTAssertEqual(rules("The first time I saw it was great, the second time was boring"), "The first time I saw it was great, the second time was boring.")
+        XCTAssertEqual(rules("I came first, second was Tom"), "I came first, second was Tom.")
+        XCTAssertEqual(rules("First we go home, second we eat"), "1. We go home\n2. We eat")
+        XCTAssertEqual(rules("Ich brauche erstens Milch zweitens Brot und drittens Eier"), "Ich brauche:\n1. Milch\n2. Brot\n3. Eier")
+    }
+
+    func testDottedAbbreviationsDoNotStartASentence() {
+        XCTAssertEqual(rules("das ist z.B. so und d.h. wir gehen"), "Das ist z.B. so und d.h. wir gehen.")
+        XCTAssertEqual(rules("am 3. Nov. kommt er. dann sehen wir"), "Am 3. Nov. kommt er. Dann sehen wir.")
+        XCTAssertEqual(rules("das mag ich so. dann eben nicht"), "Das mag ich so. Dann eben nicht.")
+    }
+
     func testDictionaryEntryWithoutIDDoesNotWipeTheDictionary() throws {
         let json = #"{"dictionary":[{"term":"Beeni"},{"id":"0E6C9D5B-7E0B-4C38-9D57-1D7C2B0F6A11","term":"Exodus","soundsLike":["exodos"]}],"snippets":[{"trigger":"adresse","text":"Musterweg 1"}]}"#
         let s = try JSONDecoder().decode(Settings.self, from: json.data(using: .utf8)!)

@@ -73,24 +73,34 @@ public static class TextPipeline
 
     // ───────────────────────── Whisper-Halluzinationen
 
-    static readonly string[] Hallucinations =
+    /// <summary>Abspann-Texte aus Untertiteln, die niemand diktiert: der ganze Satz, der sie enthält, fällt weg.</summary>
+    static readonly string[] HallucinatedCredits =
     {
         "untertitel im auftrag des zdf", "untertitelung des zdf", "untertitel von stephanie geiges", "untertitelung im auftrag des zdf",
-        "vielen dank fürs zuschauen", "danke fürs zuschauen", "bis zum nächsten mal", "copyright wdr", "swr 2020", "amara.org",
-        "thank you for watching", "thanks for watching", "please subscribe", "subtitles by the amara.org community",
+        "copyright wdr", "swr 2020", "amara.org", "subtitles by the amara.org community",
     };
+
+    /// <summary>Floskeln, die Whisper bei Stille anhängt, die aber auch Teil eines echten Satzes sein können:
+    /// nur entfernen, wenn sie als eigener Satz dastehen.</summary>
+    static readonly string[] HallucinatedPhrases =
+    {
+        "vielen dank fürs zuschauen", "danke fürs zuschauen", "thank you for watching", "thanks for watching", "please subscribe",
+    };
+
+    /// <summary>Kann ein ganz normaler Gruß sein („Danke dir, bis zum nächsten Mal“): nur wenn sonst nichts erkannt wurde.</summary>
+    static readonly string[] HallucinatedAlone = { "bis zum nächsten mal" };
 
     public static string StripHallucinations(string text)
     {
-        var t = Text.Replace(text, @"\[[^\]]{1,40}\]|\((?:musik|music|applaus|applause|lachen|laughter|stille|silence|räuspern|seufzen)[^)]{0,20}\)|\*[^*]{1,30}\*", " ");
+        // Marker wie [BLANK_AUDIO], (Musik), *lacht* – aber nicht „5 * 3 * 2“
+        var t = Text.Replace(text, @"\[[^\]]{1,40}\]|\((?:musik|music|applaus|applause|lachen|laughter|stille|silence|räuspern|seufzen)[^)]{0,20}\)|\*(?=\S)[^*]{1,30}(?<=\S)\*", " ");
         var low = t.ToLowerInvariant();
-        foreach (var h in Hallucinations)
-        {
-            if (!low.Contains(h)) continue;
-            // Nur entfernen, wenn der Satz allein steht (nicht mitten in echtem Inhalt)
-            t = Text.Replace(t, @"(?:^|(?<=[.!?]))\s*[^.!?]*" + Regex.Escape(h) + @"[^.!?]*[.!?]?", " ");
-        }
-        return CollapseSpaces(t).Trim();
+        foreach (var h in HallucinatedCredits)
+            if (low.Contains(h)) t = Text.Replace(t, @"(?:^|(?<=[.!?]))\s*[^.!?]*" + Regex.Escape(h) + @"[^.!?]*[.!?]?", " ");
+        foreach (var h in HallucinatedPhrases)
+            if (low.Contains(h)) t = Text.Replace(t, @"(?:^|(?<=[.!?]))\s*" + Regex.Escape(h) + @"\s*[.!?]*(?=\s|$)", " ");
+        t = CollapseSpaces(t).Trim();
+        return HallucinatedAlone.Contains(Vocabulary.Normalize(t)) ? "" : t;
     }
 
     // ───────────────────────── Füllwörter und Stotterer
@@ -182,12 +192,15 @@ public static class TextPipeline
 
     // ───────────────────────── Gesprochene Befehle
 
+    /// <summary>Nach Artikel & Co. ist es Inhalt, kein Befehl: „die neue Zeile im Code“, „einen neuen Absatz im Vertrag“, „der Punkt ist“.</summary>
+    const string NotAfterDeterminer = @"(?<!\b(?:der|die|das|den|dem|des|ein|eine|einen|einem|einer|eines|kein|keine|keinen|keinem|keiner|mein|meine|meinen|meinem|meiner|dein|deine|deinen|deinem|deiner|unser|unsere|unseren|unserem|unserer|diese|dieser|diesen|diesem|dieses|jede|jeder|jeden|jedem|jedes|im|zum|zur|vom|am|the|a|an|this|that|my|your|our|every|each)[ \t])";
+
     public static string ApplySpokenCommands(string text)
     {
         const string paragraph = @"(?:neuer|neuen|nächster|nächsten)\s+absatz|new\s+paragraph|next\s+paragraph";
         const string line = @"(?:neue|nächste)\s+zeile|zeilenumbruch|new\s+line|next\s+line|line\s+break";
-        var t = Text.Replace(text, @"[ \t]*(?:[,;:][ \t]*)?(?<![\p{L}])(?:" + paragraph + @")(?![\p{L}])[.,;:!]?[ \t]*", "\n\n");
-        return Text.Replace(t, @"[ \t]*(?:[,;:][ \t]*)?(?<![\p{L}])(?:" + line + @")(?![\p{L}])[.,;:!]?[ \t]*", "\n");
+        var t = Text.Replace(text, @"[ \t]*(?:[,;:][ \t]*)?(?<![\p{L}])" + NotAfterDeterminer + "(?:" + paragraph + @")(?![\p{L}])[.,;:!]?[ \t]*", "\n\n");
+        return Text.Replace(t, @"[ \t]*(?:[,;:][ \t]*)?(?<![\p{L}])" + NotAfterDeterminer + "(?:" + line + @")(?![\p{L}])[.,;:!]?[ \t]*", "\n");
     }
 
     static readonly (string Word, string Sign)[] PunctuationWords =
@@ -205,18 +218,20 @@ public static class TextPipeline
         foreach (var (word, sign) in PunctuationWords)
         {
             var w = string.Join(@"\s+", word.Split(' ').Select(Regex.Escape));
-            t = Text.Replace(t, @"[ \t]*[,.]?[ \t]*(?<![\p{L}])" + w + @"(?![\p{L}])[,.]?", Text.EscapeReplacement(sign));
+            t = Text.Replace(t, @"[ \t]*[,.]?[ \t]*(?<![\p{L}])" + NotAfterDeterminer + w + @"(?![\p{L}])[,.]?", Text.EscapeReplacement(sign));
         }
         return FixSpacing(t);
     }
 
     // ───────────────────────── Selbstkorrekturen
 
+    /// <summary>Längere Marker zuerst, damit „sorry, ich meine“ nicht als „ich meine“ mit Rest „sorry“ gelesen wird.
+    /// Bewusst ohne „korrigiere“: „Lies den Text, korrigiere Fehler“ ist eine Bitte, keine Selbstkorrektur.</summary>
     static readonly string[] CorrectionMarkers =
     {
-        "nein, ich meine", "nein ich meine", "nein, warte", "nein warte", "ich meine", "ich mein", "ich meinte", "besser gesagt",
-        "oder besser", "korrigiere", "korrektur", "sorry, ich meine", "pardon",
-        "no, i mean", "no wait", "no, wait", "i mean", "i meant", "sorry, i meant", "or rather", "correction",
+        "sorry, ich meine", "nein, ich meine", "nein ich meine", "sorry, i meant", "nein, warte", "nein warte", "besser gesagt",
+        "no, i mean", "oder besser", "ich meinte", "ich meine", "ich mein", "korrektur", "pardon",
+        "no, wait", "no wait", "or rather", "correction", "i meant", "i mean",
     };
 
     static readonly string[] ScratchMarkers = { "streich das", "vergiss das", "lösch das", "scratch that", "forget that", "delete that" };
@@ -329,6 +344,23 @@ public static class TextPipeline
         new[] { "viertens", "fourth", "fourthly" }, new[] { "fünftens", "fifth", "fifthly" }, new[] { "sechstens", "sixth" }, new[] { "siebtens", "seventh" },
     };
 
+    static readonly HashSet<string> OrdinalDeterminers = new()
+    {
+        "the", "a", "an", "my", "your", "our", "his", "her", "their", "its", "this", "that", "every", "each", "one", "for", "at", "in", "on", "came", "comes", "come",
+    };
+
+    /// <summary>Das Wort direkt vor <paramref name="index"/> (klein), "" wenn dort keins steht.</summary>
+    static string WordBefore(string text, int index)
+    {
+        int end = index;
+        while (end > 0 && Text.IsHSpace(text[end - 1])) end--;
+        int start = end;
+        while (start > 0 && char.IsLetter(text[start - 1])) start--;
+        return text[start..end].ToLowerInvariant();
+    }
+
+    static readonly HashSet<string> AmbiguousOrdinals = new() { "first", "second", "third", "fourth", "fifth", "sixth", "seventh" };
+
     /// <summary>„Ich brauche erstens Milch zweitens Brot drittens Eier“ → nummerierte Liste.</summary>
     public static string FormatLists(string text)
     {
@@ -341,6 +373,13 @@ public static class TextPipeline
             var w = m.Groups[1].Value.ToLowerInvariant();
             int rank = Array.FindIndex(Ordinals, o => o.Contains(w));
             if (rank < 0) return text;
+            // „first“, „second“ … sind auch normale Wörter („the first time“, „I came first“): die Aufzählung muss am
+            // Satz-/Teilsatzanfang beginnen, und kein Glied darf hinter einem Artikel stehen
+            if (AmbiguousOrdinals.Contains(w))
+            {
+                int at = m.Groups[1].Index;
+                if (ranks.Count == 0 ? !AtClauseStart(text, at) : OrdinalDeterminers.Contains(WordBefore(text, at))) return text;
+            }
             ranks.Add(rank);
         }
         if (!ranks.SequenceEqual(Enumerable.Range(0, ranks.Count))) return text;
@@ -388,6 +427,8 @@ public static class TextPipeline
     {
         "z", "b", "bzw", "usw", "ca", "d", "h", "u", "a", "evtl", "ggf", "inkl", "nr", "dr", "etc", "e.g", "i.e",
         "vs", "mr", "mrs", "ms", "st", "bspw", "vgl", "sog", "zb", "prof", "mio", "mrd", "jh", "abs", "s",
+        "z.b", "d.h", "u.a", "o.ä", "z.t", "v.a", "i.d.r", "u.u", "s.o", "s.u", "exkl", "zzgl", "bzgl", "uvm", "usf", "tel", "str",
+        "jan", "feb", "apr", "aug", "sept", "okt", "nov", "dez",
     };
 
     /// <summary>Großbuchstabe am Textanfang, nach Zeilenumbruch und nach .!? (außer Abkürzungen und Ordnungszahlen).</summary>

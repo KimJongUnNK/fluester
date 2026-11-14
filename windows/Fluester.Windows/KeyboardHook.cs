@@ -6,8 +6,11 @@ using static Fluester.Windows.Native;
 namespace Fluester.Windows;
 
 /// <summary>Systemweiter Tastatur-Hook (WH_KEYBOARD_LL): erkennt Drücken/Loslassen der Diktat-Taste, Umschalt als
-/// Command-Mode-Zusatz, andere Tasten (→ kein Diktat) und Esc (→ Abbruch). Die Rückmeldungen laufen asynchron
-/// über den UI-Thread, damit der Hook nie blockiert (Windows entfernt sonst langsame Hooks).</summary>
+/// Command-Mode-Zusatz, andere Tasten (→ kein Diktat) und Esc (→ Abbruch).
+/// Der Hook läuft auf einem eigenen Thread mit eigener Nachrichtenschleife: Windows entfernt einen Hook still, wenn
+/// sein Thread ein paar hundert Millisekunden nicht antwortet – und der UI-Thread ist beim Öffnen des Mikrofons oder
+/// beim Kopieren der Markierung genau so lange beschäftigt, während die gehaltene Taste Wiederholungen schickt.
+/// Die Rückmeldungen gehen asynchron an den UI-Thread.</summary>
 sealed class KeyboardHook : IDisposable
 {
     public event Action<bool>? Pressed;          // command?
@@ -26,9 +29,12 @@ sealed class KeyboardHook : IDisposable
     public bool IsInstalled => hook != IntPtr.Zero;
     public static readonly Stopwatch Clock = Stopwatch.StartNew();
 
-    IntPtr hook;
+    volatile IntPtr hook;
     readonly LowLevelKeyboardProc proc;
     SynchronizationContext? ui;
+    Thread? thread;
+    SynchronizationContext? hookContext;
+    readonly object gate = new();
     bool hotkeyDown, ctrlDown, winDown, comboUsedWin, shiftDown;
 
     public KeyboardHook() => proc = HookProc;
@@ -37,14 +43,41 @@ sealed class KeyboardHook : IDisposable
     {
         if (hook != IntPtr.Zero) return true;
         ui = SynchronizationContext.Current;
-        hook = SetWindowsHookEx(WH_KEYBOARD_LL, proc, GetModuleHandle(null), 0);
-        if (hook == IntPtr.Zero) Fluester.Engine.Log.Write("Tastatur-Hook fehlgeschlagen: " + Marshal.GetLastWin32Error());
+        using var ready = new ManualResetEventSlim();
+        int error = 0;
+        thread = new Thread(() =>
+        {
+            var ctx = new System.Windows.Forms.WindowsFormsSynchronizationContext();
+            SynchronizationContext.SetSynchronizationContext(ctx);
+            hookContext = ctx;
+            hook = SetWindowsHookEx(WH_KEYBOARD_LL, proc, GetModuleHandle(null), 0);
+            if (hook == IntPtr.Zero) error = Marshal.GetLastWin32Error();
+            ready.Set();
+            if (hook == IntPtr.Zero) return;
+            System.Windows.Forms.Application.Run();   // Nachrichtenschleife nur für den Hook
+        }) { IsBackground = true, Name = "Fluester.Tastatur" };
+        thread.SetApartmentState(ApartmentState.STA);
+        thread.Start();
+        ready.Wait();
+        if (hook == IntPtr.Zero) Fluester.Engine.Log.Write("Tastatur-Hook fehlgeschlagen: " + error);
         return hook != IntPtr.Zero;
     }
 
     public void Dispose()
     {
-        if (hook != IntPtr.Zero) UnhookWindowsHookEx(hook);
+        var ctx = hookContext;
+        var t = thread;
+        hookContext = null;
+        thread = null;
+        if (hook == IntPtr.Zero || ctx == null) return;
+        // Auf dem Hook-Thread abmelden und dessen Schleife beenden
+        ctx.Post(_ =>
+        {
+            if (hook != IntPtr.Zero) UnhookWindowsHookEx(hook);
+            hook = IntPtr.Zero;
+            System.Windows.Forms.Application.ExitThread();
+        }, null);
+        t?.Join(2000);
         hook = IntPtr.Zero;
     }
 
@@ -69,7 +102,9 @@ sealed class KeyboardHook : IDisposable
             return CallNextHookEx(hook, nCode, wParam, lParam);
         try
         {
-            if (Handle(k.vkCode, k.scanCode, down, up)) return (IntPtr)1;   // schlucken
+            bool swallow;
+            lock (gate) swallow = Handle(k.vkCode, k.scanCode, down, up);
+            if (swallow) return (IntPtr)1;   // schlucken
         }
         catch (Exception e)
         {
@@ -163,6 +198,6 @@ sealed class KeyboardHook : IDisposable
     /// <summary>Nach Wechsel der Taste oder Fokusverlust: Zustand zurücksetzen.</summary>
     public void Reset()
     {
-        hotkeyDown = ctrlDown = winDown = comboUsedWin = shiftDown = false;
+        lock (gate) hotkeyDown = ctrlDown = winDown = comboUsedWin = shiftDown = false;
     }
 }

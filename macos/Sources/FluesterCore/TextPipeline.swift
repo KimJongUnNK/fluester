@@ -74,20 +74,31 @@ public enum TextPipeline {
     // MARK: Whisper-Halluzinationen
 
     /// Bekannte Phantom-Sätze, die Whisper bei Stille/Rauschen erfindet, und Klammer-Marker wie [BLANK_AUDIO].
-    static let hallucinations = [
+    /// Abspann-Texte aus Untertiteln, die niemand diktiert: der ganze Satz, der sie enthält, fällt weg.
+    static let hallucinatedCredits = [
         "untertitel im auftrag des zdf", "untertitelung des zdf", "untertitel von stephanie geiges", "untertitelung im auftrag des zdf",
-        "vielen dank fürs zuschauen", "danke fürs zuschauen", "bis zum nächsten mal", "copyright wdr", "swr 2020", "amara.org",
-        "thank you for watching", "thanks for watching", "please subscribe", "subtitles by the amara.org community"
+        "copyright wdr", "swr 2020", "amara.org", "subtitles by the amara.org community"
     ]
+    /// Floskeln, die Whisper bei Stille anhängt, die aber auch Teil eines echten Satzes sein können:
+    /// nur entfernen, wenn sie als eigener Satz dastehen.
+    static let hallucinatedPhrases = [
+        "vielen dank fürs zuschauen", "danke fürs zuschauen", "thank you for watching", "thanks for watching", "please subscribe"
+    ]
+    /// Kann ein ganz normaler Gruß sein („Danke dir, bis zum nächsten Mal“): nur wenn sonst nichts erkannt wurde.
+    static let hallucinatedAlone = ["bis zum nächsten mal"]
 
     public static func stripHallucinations(_ text: String) -> String {
-        var t = regexReplace(text, "\\[[^\\]]{1,40}\\]|\\((?:musik|music|applaus|applause|lachen|laughter|stille|silence|räuspern|seufzen)[^)]{0,20}\\)|\\*[^*]{1,30}\\*", " ")
+        // Marker wie [BLANK_AUDIO], (Musik), *lacht* – aber nicht „5 * 3 * 2“
+        var t = regexReplace(text, "\\[[^\\]]{1,40}\\]|\\((?:musik|music|applaus|applause|lachen|laughter|stille|silence|räuspern|seufzen)[^)]{0,20}\\)|\\*(?=\\S)[^*]{1,30}(?<=\\S)\\*", " ")
         let low = t.lowercased()
-        for h in hallucinations where low.contains(h) {
-            // Nur entfernen, wenn der Satz allein steht (nicht mitten in echtem Inhalt)
+        for h in hallucinatedCredits where low.contains(h) {
             t = regexReplace(t, "(?:^|(?<=[.!?]))\\s*[^.!?]*" + NSRegularExpression.escapedPattern(for: h) + "[^.!?]*[.!?]?", " ")
         }
-        return collapseSpaces(t).trimmingCharacters(in: .whitespacesAndNewlines)
+        for h in hallucinatedPhrases where low.contains(h) {
+            t = regexReplace(t, "(?:^|(?<=[.!?]))\\s*" + NSRegularExpression.escapedPattern(for: h) + "\\s*[.!?]*(?=\\s|$)", " ")
+        }
+        t = collapseSpaces(t).trimmingCharacters(in: .whitespacesAndNewlines)
+        return hallucinatedAlone.contains(Vocabulary.normalize(t)) ? "" : t
     }
 
     // MARK: Füllwörter und Stotterer
@@ -179,12 +190,15 @@ public enum TextPipeline {
 
     // MARK: Gesprochene Befehle
 
+    /// Nach Artikel & Co. ist es Inhalt, kein Befehl: „die neue Zeile im Code“, „einen neuen Absatz im Vertrag“, „der Punkt ist“.
+    static let notAfterDeterminer = "(?<!\\b(?:der|die|das|den|dem|des|ein|eine|einen|einem|einer|eines|kein|keine|keinen|keinem|keiner|mein|meine|meinen|meinem|meiner|dein|deine|deinen|deinem|deiner|unser|unsere|unseren|unserem|unserer|diese|dieser|diesen|diesem|dieses|jede|jeder|jeden|jedem|jedes|im|zum|zur|vom|am|the|a|an|this|that|my|your|our|every|each)[ \\t])"
+
     public static func applySpokenCommands(_ text: String) -> String {
         var t = text
         let paragraph = "(?:neuer|neuen|nächster|nächsten)\\s+absatz|new\\s+paragraph|next\\s+paragraph"
         let line = "(?:neue|nächste)\\s+zeile|zeilenumbruch|new\\s+line|next\\s+line|line\\s+break"
-        t = regexReplace(t, "[ \\t]*(?:[,;:][ \\t]*)?(?<![\\p{L}])(?:" + paragraph + ")(?![\\p{L}])[.,;:!]?[ \\t]*", "\n\n")
-        t = regexReplace(t, "[ \\t]*(?:[,;:][ \\t]*)?(?<![\\p{L}])(?:" + line + ")(?![\\p{L}])[.,;:!]?[ \\t]*", "\n")
+        t = regexReplace(t, "[ \\t]*(?:[,;:][ \\t]*)?(?<![\\p{L}])" + notAfterDeterminer + "(?:" + paragraph + ")(?![\\p{L}])[.,;:!]?[ \\t]*", "\n\n")
+        t = regexReplace(t, "[ \\t]*(?:[,;:][ \\t]*)?(?<![\\p{L}])" + notAfterDeterminer + "(?:" + line + ")(?![\\p{L}])[.,;:!]?[ \\t]*", "\n")
         return t
     }
 
@@ -201,7 +215,7 @@ public enum TextPipeline {
         for (word, sign) in punctuationWords {
             let w = word.split(separator: " ").map { NSRegularExpression.escapedPattern(for: String($0)) }.joined(separator: "\\s+")
             // Satzzeichen, das die Erkennung selbst schon gesetzt hat, wird ersetzt
-            t = regexReplace(t, "[ \\t]*[,.]?[ \\t]*(?<![\\p{L}])" + w + "(?![\\p{L}])[,.]?", NSRegularExpression.escapedTemplate(for: sign))
+            t = regexReplace(t, "[ \\t]*[,.]?[ \\t]*(?<![\\p{L}])" + notAfterDeterminer + w + "(?![\\p{L}])[,.]?", NSRegularExpression.escapedTemplate(for: sign))
         }
         return fixSpacing(t)
     }
@@ -209,10 +223,12 @@ public enum TextPipeline {
     // MARK: Selbstkorrekturen
 
     /// Anker-Marker: danach kommt die Korrektur des unmittelbar Gesagten.
+    /// Längere Marker zuerst, damit „sorry, ich meine“ nicht als „ich meine“ mit Rest „sorry“ gelesen wird.
+    /// Bewusst ohne „korrigiere“: „Lies den Text, korrigiere Fehler“ ist eine Bitte, keine Selbstkorrektur.
     static let correctionMarkers = [
-        "nein, ich meine", "nein ich meine", "nein, warte", "nein warte", "ich meine", "ich mein", "ich meinte", "besser gesagt",
-        "oder besser", "korrigiere", "korrektur", "sorry, ich meine", "pardon",
-        "no, i mean", "no wait", "no, wait", "i mean", "i meant", "sorry, i meant", "or rather", "correction"
+        "sorry, ich meine", "nein, ich meine", "nein ich meine", "sorry, i meant", "nein, warte", "nein warte", "besser gesagt",
+        "no, i mean", "oder besser", "ich meinte", "ich meine", "ich mein", "korrektur", "pardon",
+        "no, wait", "no wait", "or rather", "correction", "i meant", "i mean"
     ]
     /// Löschen-Marker: das Vorherige (Satz oder Teilsatz) fällt weg.
     static let scratchMarkers = ["streich das", "vergiss das", "lösch das", "scratch that", "forget that", "delete that"]
@@ -303,6 +319,27 @@ public enum TextPipeline {
         ["viertens", "fourth", "fourthly"], ["fünftens", "fifth", "fifthly"], ["sechstens", "sixth"], ["siebtens", "seventh"]
     ]
 
+    static let ordinalDeterminers: Set<String> = ["the", "a", "an", "my", "your", "our", "his", "her", "their", "its", "this", "that", "every", "each",
+                                                  "one", "for", "at", "in", "on", "came", "comes", "come"]
+
+    /// Das Wort direkt vor `index` (klein), "" wenn dort keins steht.
+    static func wordBefore(_ text: String, _ index: String.Index) -> String {
+        var end = index
+        while end > text.startIndex {
+            let prev = text.index(before: end)
+            let c = text[prev]
+            if c == " " || c == "\t" || c == "\u{00A0}" { end = prev } else { break }
+        }
+        var start = end
+        while start > text.startIndex {
+            let prev = text.index(before: start)
+            if text[prev].isLetter { start = prev } else { break }
+        }
+        return text[start..<end].lowercased()
+    }
+
+    static let ambiguousOrdinals: Set<String> = ["first", "second", "third", "fourth", "fifth", "sixth", "seventh"]
+
     /// "Ich brauche erstens Milch zweitens Brot drittens Eier" → nummerierte Liste.
     public static func formatLists(_ text: String) -> String {
         let all = ordinals.flatMap { $0 }.joined(separator: "|")
@@ -315,6 +352,11 @@ public enum TextPipeline {
             guard let r = Range(m.range(at: 1), in: text) else { return text }
             let w = text[r].lowercased()
             guard let rank = ordinals.firstIndex(where: { $0.contains(w) }) else { return text }
+            // „first“, „second“ … sind auch normale Wörter („the first time“, „I came first“): die Aufzählung muss am
+            // Satz-/Teilsatzanfang beginnen, und kein Glied darf hinter einem Artikel stehen
+            if ambiguousOrdinals.contains(w) {
+                if ranks.isEmpty ? !atClauseStart(text, r.lowerBound) : ordinalDeterminers.contains(wordBefore(text, r.lowerBound)) { return text }
+            }
             ranks.append(rank)
         }
         guard ranks == Array(0..<ranks.count) else { return text }
@@ -361,7 +403,9 @@ public enum TextPipeline {
     }
 
     static let abbreviations: Set<String> = ["z", "b", "bzw", "usw", "ca", "d", "h", "u", "a", "evtl", "ggf", "inkl", "nr", "dr", "etc", "e.g", "i.e",
-                                             "vs", "mr", "mrs", "ms", "st", "bspw", "vgl", "sog", "zb", "prof", "mio", "mrd", "jh", "abs", "s"]
+                                             "vs", "mr", "mrs", "ms", "st", "bspw", "vgl", "sog", "zb", "prof", "mio", "mrd", "jh", "abs", "s",
+                                             "z.b", "d.h", "u.a", "o.ä", "z.t", "v.a", "i.d.r", "u.u", "s.o", "s.u", "exkl", "zzgl", "bzgl", "uvm", "usf", "tel", "str",
+                                             "jan", "feb", "apr", "aug", "sept", "okt", "nov", "dez"]
 
     /// Großbuchstabe am Textanfang, nach Zeilenumbruch und nach .!? (außer Abkürzungen und Ordnungszahlen).
     public static func capitalizeSentences(_ s: String) -> String {
