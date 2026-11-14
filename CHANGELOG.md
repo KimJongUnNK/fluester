@@ -2,6 +2,20 @@
 
 Alle wichtigen Änderungen an Flüster. Versionen folgen [Semantic Versioning](https://semver.org/lang/de/).
 
+## [1.3.3] – 2026-11-14
+
+Zweite Fehlersuche: Textregeln, die echte Sätze zerstört haben, und Tastenerkennung, die ausfallen konnte.
+
+- **Ganze Sätze verschwanden:** „Danke dir, bis zum nächsten Mal“ wurde komplett gelöscht, weil Flüster jeden Satz mit dieser Floskel für eine Whisper-Halluzination hielt. Jetzt fällt sie nur weg, wenn sonst nichts erkannt wurde. „Vielen Dank fürs Zuschauen“ & Co. nur noch als eigener Satz, nicht mitten in einem echten.
+- **„neue Zeile“ und „neuer Absatz“ als Inhalt:** „Die neue Zeile im Code ist falsch“ wurde zu „Die⏎Im Code ist falsch“. Nach einem Artikel (die, einen, the …) ist es jetzt Text, kein Befehl. Gilt auch für gesprochene Satzzeichen („der Punkt ist wichtig“).
+- **Aufzählungen:** „The first time …, the second time …“ wurde zur nummerierten Liste. Englische „first/second/…“ zählen nur noch, wenn die Aufzählung am Satzanfang beginnt und kein Artikel davorsteht.
+- **Selbstkorrekturen:** „Lies den Text, korrigiere Fehler“ wurde zu „Lies den Fehler“ („korrigiere“ ist kein Korrektur-Signal mehr). „…, sorry, ich meine X“ ließ ein „sorry“ stehen bzw. löschte das falsche Wort.
+- **Rechnungen:** „5 * 3 * 2“ verlor die 3 (als Geräusch-Marker `*…*` gelesen).
+- **Großschreibung nach Abkürzungen:** „z.B. So“ → „z.B. so“; auch d.h., u.a., Nov., Str., Tel. und weitere.
+- **Windows – Taste fiel aus („Taste nicht aktiv“):** Die Tastenerkennung lief auf dem Fenster-Thread. War der kurz beschäftigt (Mikrofon öffnen, Markierung kopieren), während die gehaltene Taste Wiederholungen schickte, konnte Windows sie still abschalten – bis zum Neustart. Sie läuft jetzt auf einem eigenen Thread.
+- **Mac – Loslassen ging verloren:** Schaltete macOS die Tastenerkennung kurz ab (System unter Last), kam das Loslassen nicht an und die Aufnahme lief weiter. Flüster prüft jetzt beim Wiedereinschalten, ob die Taste noch gehalten wird.
+- **Abbrechen mit Esc, dann sofort neu diktieren:** Meldete das abgebrochene Diktat danach noch einen Fehler (z. B. Netzwerk), setzte das den Zustand zurück – die neue Aufnahme ließ sich nicht mehr beenden. Mac, Windows und Linux.
+
 ## [1.3.2] – 2026-11-12
 
 Update-Knopf am Mac und unter Windows, dazu Fehlersuche über die ganze App: Fixes für Tastenerkennung, Datenverlust, Zwischenablage und Textbereinigung.

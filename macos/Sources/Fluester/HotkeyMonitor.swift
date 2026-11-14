@@ -79,6 +79,11 @@ final class HotkeyMonitor {
     private func handle(type: CGEventType, event: CGEvent) -> Unmanaged<CGEvent>? {
         if type == .tapDisabledByTimeout || type == .tapDisabledByUserInput {
             if let tap = tap { CGEvent.tapEnable(tap: tap, enable: true) }
+            // Solange der Tap aus war, kam kein Loslassen an – sonst liefe die Aufnahme weiter, bis man nochmal drückt
+            if isDown && !CGEventSource.flagsState(.combinedSessionState).contains(flag) {
+                isDown = false
+                onRelease?()
+            }
             return Unmanaged.passUnretained(event)
         }
         let code = event.getIntegerValueField(.keyboardEventKeycode)

@@ -311,6 +311,9 @@ final class DictationController {
         } catch is CancellationError {
             return
         } catch {
+            // Mit Esc abgebrochen: Netzwerk-Aufrufe melden das als eigenen Fehler. Dann nichts anzeigen und vor allem
+            // den Zustand nicht anfassen – inzwischen kann schon das nächste Diktat laufen.
+            if Task.isCancelled { return }
             finishWith(error: error.localizedDescription)
         }
     }

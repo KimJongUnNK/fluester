@@ -354,8 +354,10 @@ sealed class Daemon : IDisposable
             catch (OperationCanceledException) { }
             catch (Exception e)
             {
+                // Nach dem Abbrechen nichts mehr anzeigen und den Zustand nicht anfassen – inzwischen kann das nächste Diktat laufen
+                if (ct.IsCancellationRequested) return;
                 Log.Write("Diktat: " + e);
-                Post(() => Fail(e is FluesterException ? e.Message : "Fehler: " + e.Message));
+                Post(() => { if (!ct.IsCancellationRequested) Fail(e is FluesterException ? e.Message : "Fehler: " + e.Message); });
             }
         });
     }

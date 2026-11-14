@@ -213,6 +213,8 @@ sealed class DictationController : IDisposable
         }
         catch (Exception e)
         {
+            // Nach Esc nichts mehr anzeigen und den Zustand nicht anfassen – inzwischen kann das nächste Diktat laufen
+            if (ct.IsCancellationRequested) return;
             Log.Write("Diktat: " + e);
             Fail(e is FluesterException ? e.Message : "Fehler: " + e.Message);
         }

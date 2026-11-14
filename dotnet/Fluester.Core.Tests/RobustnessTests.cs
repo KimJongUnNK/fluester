@@ -115,4 +115,53 @@ public class RobustnessTests
         // Ohne Komma wie bisher
         Assert.Equal("Wir müssen los.", Rules("wir wir müssen los"));
     }
+
+    static string Heard(string s) => TextPipeline.RuleBased(TextPipeline.StripHallucinations(s), new CleanupOptions());
+
+    [Fact]
+    public void RealSentencesAreNotMistakenForHallucinations()
+    {
+        // Früher fiel der ganze Satz weg – das komplette Diktat war leer
+        Assert.Equal("Danke dir, bis zum nächsten Mal.", Heard("Danke dir, bis zum nächsten Mal"));
+        Assert.Equal("Viel Erfolg. Bis zum nächsten Mal.", Heard("Viel Erfolg. Bis zum nächsten Mal."));
+        Assert.Equal("", Heard("Bis zum nächsten Mal."));                       // allein: Whisper bei Stille
+        Assert.Equal("Das Meeting war gut.", Heard("Das Meeting war gut. Vielen Dank fürs Zuschauen."));
+        Assert.Equal("Ich sagte am Ende vielen Dank fürs Zuschauen und ging.", Heard("Ich sagte am Ende vielen Dank fürs Zuschauen und ging"));
+        Assert.Equal("", Heard("Untertitel der Amara.org-Community"));
+        Assert.Equal("Das kostet 5 * 3 * 2 Euro.", Heard("Das kostet 5 * 3 * 2 Euro"));
+        Assert.Equal("Er nickt kurz.", Heard("Er *lacht* nickt kurz"));
+    }
+
+    [Fact]
+    public void SpokenCommandsAreContentAfterAnArticle()
+    {
+        Assert.Equal("Die neue Zeile im Code ist falsch.", Rules("Die neue Zeile im Code ist falsch"));
+        Assert.Equal("Wir brauchen einen neuen Absatz im Vertrag.", Rules("Wir brauchen einen neuen Absatz im Vertrag"));
+        Assert.Equal("Hallo Lisa\nWie geht es dir.", Rules("Hallo Lisa, neue Zeile, wie geht es dir"));
+        Assert.Equal("Erster Teil\n\nZweiter Teil", Rules("erster Teil neuer Absatz zweiter Teil"));
+        var spoken = new CleanupOptions(SpokenPunctuation: true);
+        Assert.Equal("Der Punkt ist wichtig und das Komma auch.", TextPipeline.RuleBased("Der Punkt ist wichtig und das Komma auch", spoken));
+        Assert.Equal("Hallo, wie geht es dir?", TextPipeline.RuleBased("Hallo Komma wie geht es dir Fragezeichen", spoken));
+    }
+
+    [Fact]
+    public void SelfCorrectionsAndListsAvoidFalsePositives()
+    {
+        Assert.Equal("Bitte lies den Text, korrigiere Fehler.", Rules("Bitte lies den Text, korrigiere Fehler"));
+        Assert.Equal("Das ist schlecht.", Rules("Das ist gut, sorry, ich meine schlecht"));
+        Assert.Equal("Schreib an Peter.", Rules("Schreib an Paul, oder besser an Peter"));
+        // „first“/„second“ als normale Wörter sind keine Aufzählung
+        Assert.Equal("The first time I saw it was great, the second time was boring.", Rules("The first time I saw it was great, the second time was boring"));
+        Assert.Equal("I came first, second was Tom.", Rules("I came first, second was Tom"));
+        Assert.Equal("1. We go home\n2. We eat", Rules("First we go home, second we eat"));
+        Assert.Equal("Ich brauche:\n1. Milch\n2. Brot\n3. Eier", Rules("Ich brauche erstens Milch zweitens Brot und drittens Eier"));
+    }
+
+    [Fact]
+    public void DottedAbbreviationsDoNotStartASentence()
+    {
+        Assert.Equal("Das ist z.B. so und d.h. wir gehen.", Rules("das ist z.B. so und d.h. wir gehen"));
+        Assert.Equal("Am 3. Nov. kommt er. Dann sehen wir.", Rules("am 3. Nov. kommt er. dann sehen wir"));
+        Assert.Equal("Das mag ich so. Dann eben nicht.", Rules("das mag ich so. dann eben nicht"));
+    }
 }
