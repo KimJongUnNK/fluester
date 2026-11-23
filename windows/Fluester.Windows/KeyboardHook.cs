@@ -26,6 +26,8 @@ sealed class KeyboardHook : IDisposable
     public bool AcceptInjected { get; set; }
 
     public HotkeyChoice Choice { get; set; } = HotkeyChoice.RightCtrl;
+    /// <summary>Virtueller Tastencode der eigenen Taste (<see cref="HotkeyChoice.Custom"/>).</summary>
+    public uint CustomVk { get; set; }
     public bool IsInstalled => hook != IntPtr.Zero;
     public static readonly Stopwatch Clock = Stopwatch.StartNew();
 
@@ -36,6 +38,8 @@ sealed class KeyboardHook : IDisposable
     SynchronizationContext? hookContext;
     readonly object gate = new();
     bool hotkeyDown, ctrlDown, winDown, comboUsedWin, shiftDown;
+    Action<uint, string>? capture;
+    uint captureVk;
 
     public KeyboardHook() => proc = HookProc;
 
@@ -102,6 +106,7 @@ sealed class KeyboardHook : IDisposable
             return CallNextHookEx(hook, nCode, wParam, lParam);
         try
         {
+            if (Capturing(k, down, up)) return (IntPtr)1;
             bool swallow;
             lock (gate) swallow = Handle(k.vkCode, k.scanCode, down, up);
             if (swallow) return (IntPtr)1;   // schlucken
@@ -111,6 +116,54 @@ sealed class KeyboardHook : IDisposable
             Fluester.Engine.Log.Write("Hook: " + e.Message);
         }
         return CallNextHookEx(hook, nCode, wParam, lParam);
+    }
+
+    /// <summary>Nächste Taste als eigene Diktat-Taste aufnehmen (Einstellungen). Rückmeldung auf dem UI-Thread mit Code und Name;
+    /// Code 0 = abgebrochen. Die Taste wird geschluckt, damit sie in keiner App etwas auslöst.</summary>
+    public void CaptureNext(Action<uint, string> done)
+    {
+        lock (gate) { capture = done; captureVk = 0; }
+    }
+
+    public void CancelCapture()
+    {
+        lock (gate) { capture = null; captureVk = 0; }
+    }
+
+    bool Capturing(KBDLLHOOKSTRUCT k, bool down, bool up)
+    {
+        Action<uint, string>? done;
+        lock (gate)
+        {
+            if (capture == null && captureVk == 0) return false;
+            // Loslassen der aufgenommenen Taste auch noch schlucken
+            if (capture == null) { if (up && k.vkCode == captureVk) { captureVk = 0; return true; } return false; }
+            // AltGr schickt vorab ein unechtes Strg links
+            if (k.vkCode == VK_LCONTROL && (k.scanCode & 0x200) != 0) return true;
+            if (!down) return true;
+            done = capture;
+            capture = null;
+            captureVk = k.vkCode;
+        }
+        var name = KeyName(k.vkCode, k.scanCode, (k.flags & LLKHF_EXTENDED) != 0);
+        uint vk = k.vkCode;
+        Post(() => done(vk, name));
+        return true;
+    }
+
+    static string KeyName(uint vk, uint scan, bool extended)
+    {
+        if (vk is >= 0x70 and <= 0x87) return "F" + (vk - 0x6F);
+        var named = vk switch
+        {
+            VK_LCONTROL => "Strg links", VK_RCONTROL => "Strg rechts", VK_LMENU => "Alt links", VK_RMENU => "Alt rechts / AltGr",
+            VK_LWIN => "Win links", VK_RWIN => "Win rechts", 0x5D => "Menü-Taste", 0x13 => "Pause", 0x91 => "Rollen", 0x2C => "Druck",
+            _ => null,
+        };
+        if (named != null) return named;
+        var sb = new System.Text.StringBuilder(64);
+        int lp = (int)((scan & 0xFF) << 16) | (extended ? 1 << 24 : 0);
+        return GetKeyNameTextW(lp, sb, sb.Capacity) > 0 ? sb.ToString() : $"Taste {vk}";
     }
 
     /// <summary>true = Taste schlucken.</summary>
@@ -164,10 +217,18 @@ sealed class KeyboardHook : IDisposable
                 hotkeyDown = false;
                 Post(() => Released?.Invoke());
             }
-            // Feststelltaste/F8/AltGr schlucken (kein Umschalten, kein Menü); Strg rechts durchlassen
-            return Choice != HotkeyChoice.RightCtrl;
+            // Feststelltaste/F8/AltGr/eigene Taste schlucken (kein Umschalten, kein Menü); Strg rechts und andere
+            // Strg-/Win-Tasten durchlassen, sonst klemmen Kürzel wie Strg+C
+            if (Choice == HotkeyChoice.RightCtrl) return false;
+            if (Choice == HotkeyChoice.Custom && (IsCtrl(vk) || IsWin(vk) || vk == VK_LMENU))
+            {
+                // Win/Alt allein losgelassen öffnet Startmenü bzw. Menüleiste – unbelegte Taste dazwischen
+                if (up && (IsWin(vk) || vk == VK_LMENU)) Send(Key(VK_MASK, false), Key(VK_MASK, true));
+                return false;
+            }
+            return true;
         }
-        else if (Choice == HotkeyChoice.RightAlt && vk == VK_LCONTROL && (scan & 0x200) != 0)
+        else if ((Choice == HotkeyChoice.RightAlt || (Choice == HotkeyChoice.Custom && CustomVk == VK_RMENU)) && vk == VK_LCONTROL && (scan & 0x200) != 0)
         {
             return true; // AltGr erzeugt ein unechtes Strg links – mitschlucken
         }
@@ -192,6 +253,7 @@ sealed class KeyboardHook : IDisposable
         HotkeyChoice.CapsLock => vk == VK_CAPITAL,
         HotkeyChoice.RightAlt => vk == VK_RMENU,
         HotkeyChoice.F8 => vk == VK_F8,
+        HotkeyChoice.Custom => CustomVk != 0 && vk == CustomVk,
         _ => false,
     };
 

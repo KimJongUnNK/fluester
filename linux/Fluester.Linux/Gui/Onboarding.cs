@@ -111,7 +111,7 @@ sealed class Onboarding
         var t = Ui.Label("Halten. Sprechen. Loslassen. In jeder App – kostenlos und auf Wunsch komplett offline.", "dim-label");
         t.Halign = Gtk.Align.Center;
         t.Justify = Gtk.Justification.Center;
-        var key = main.Store.Current.Hotkey.Label(linux: true);
+        var key = main.Store.Current.HotkeyLabel(linux: true);
         Adw.ActionRow Feature(string icon, string color, string title, string sub)
         {
             var r = Ui.Row(title, sub);
@@ -179,7 +179,7 @@ sealed class Onboarding
     {
         var s = main.Store.Current;
         var box = Ui.VBox(18, Head("Schritt 4", "Diktat-Taste", "Halten = sprechen. Doppelt tippen = freihändig. + Umschalt = Command Mode."));
-        box.Append(List(Ui.Combo("Taste", "Strg rechts stört beim Tippen am wenigsten.", Enum.GetValues<HotkeyChoice>(), h => h.Label(linux: true), s.Hotkey,
+        box.Append(List(Ui.Combo("Taste", "Strg rechts stört beim Tippen am wenigsten.", Enum.GetValues<HotkeyChoice>().Where(h => h != HotkeyChoice.Custom || s.Hotkey == HotkeyChoice.Custom).ToArray(), h => h == HotkeyChoice.Custom ? "Eigene: " + s.CustomHotkeyName : h.Label(linux: true), s.Hotkey,
             v => main.Store.Update(x => x.Hotkey = v))));
         box.Append(Ui.Label("Unter Linux lässt sich die Taste nicht „schlucken“: die Feststelltaste schaltet weiter um, Alt rechts bleibt AltGr. Deshalb ist Strg rechts empfohlen.",
             "dim-label", "caption"));
@@ -215,7 +215,7 @@ sealed class Onboarding
     Gtk.Widget TryIt()
     {
         var s = main.Store.Current;
-        var key = s.Hotkey.Label(linux: true);
+        var key = s.HotkeyLabel(linux: true);
         var box = Ui.VBox(18, Head("Schritt 6", "Ausprobieren", $"Klick ins Feld, halte {key}, sprich, lass los."));
         var serviceRow = Ui.Row("Flüster", main.Live ? "Startet …" : "Vorschau");
         var auto = Ui.Switch("Bei der Anmeldung starten", "Empfohlen – dann ist Flüster immer bereit.", true, _ => { }, out var sw);

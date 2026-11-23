@@ -85,6 +85,12 @@ sealed class Daemon : IDisposable
         barInfo = bar != null ? bar.Where : "aus – " + whyNoBar + " (Rückmeldung über Benachrichtigungen)";
         Log.Write("Flow-Leiste: " + barInfo);
         recorder.Level += l => bar?.PushLevel(l);
+        if (bar != null)
+        {
+            // Knöpfe auf der Leiste – falls die Taste mal nicht reagiert
+            bar.StopClicked += () => Post(() => { if (state == State.Recording) { gestures.Reset(); Finish(); } });
+            bar.CancelClicked += () => Post(() => { if (state != State.Idle) Cancel(true); });
+        }
         bar?.Idle();
 
         var timer = new Timer(_ => Post(Tick), null, 50, 50);
@@ -99,7 +105,7 @@ sealed class Daemon : IDisposable
         };
         StartWatchdog();
         var s0 = store.Current;
-        if (s0.Notifications) Desktop.Notify("Flüster ist bereit", $"{s0.Hotkey.Label(linux: true)} halten, sprechen, loslassen.");
+        if (s0.Notifications) Desktop.Notify("Flüster ist bereit", $"{s0.HotkeyLabel(linux: true)} halten, sprechen, loslassen.");
 
         foreach (var action in queue.GetConsumingEnumerable())
         {
@@ -180,7 +186,7 @@ sealed class Daemon : IDisposable
     {
         // Nur bei einer anderen Taste zurücksetzen: Jedes Speichern (z. B. ein umgestecktes Mikrofon beim Aufnahmestart)
         // ließ sonst das Loslassen der gerade gehaltenen Taste verloren gehen – die Aufnahme lief weiter.
-        tracker.SetChoice(s.Hotkey);
+        tracker.SetChoice(s.Hotkey, s.CustomHotkeyCode);
         gestures.DoubleTapEnabled = s.HandsFreeDoubleTap;
         if (bar != null)
         {
@@ -308,7 +314,7 @@ sealed class Daemon : IDisposable
         Log.Write("Nur kurz getippt – Diktat verworfen");
         var s = store.Current;
         if (s.Sounds) Desktop.Sound("stop");
-        var key = s.Hotkey.Label(linux: true);
+        var key = s.HotkeyLabel(linux: true);
         if (BarOk) bar!.Error($"{key} halten zum Sprechen · 2× tippen = freihändig", 3.5);
         else if (s.Notifications) Desktop.Notify("Taste halten zum Sprechen", $"{key} gedrückt halten, sprechen, loslassen. Doppelt tippen = freihändig.");
     }
@@ -557,7 +563,7 @@ sealed class Daemon : IDisposable
                     BusySeconds = state == State.Processing ? Math.Round(clock.Elapsed.TotalSeconds - processingSince, 1) : 0,
                     Pid = Environment.ProcessId,
                     Version = typeof(Daemon).Assembly.GetName().Version?.ToString(3) ?? "dev",
-                    Hotkey = cur.Hotkey.Label(linux: true),
+                    Hotkey = cur.HotkeyLabel(linux: true),
                     Microphone = MicDescription(cur.MicrophoneId),
                     Bar = bar is { Alive: false } ? "Verbindung zur Anzeige verloren – Flüster neu starten" : barInfo,
                     BarOk = BarOk,
@@ -572,7 +578,7 @@ sealed class Daemon : IDisposable
                     : s.Engine.Label();
                 return $"""
                     Flüster läuft · {(state switch { State.Recording => "hört zu", State.Processing => $"erkennt seit {clock.Elapsed.TotalSeconds - processingSince:0} s", _ => "bereit" })} · PID {Environment.ProcessId}
-                      Taste:     {s.Hotkey.Label(linux: true)}
+                      Taste:     {s.HotkeyLabel(linux: true)}
                       Mikrofon:  {Recorder.Describe(s.MicrophoneId)}
                       Leiste:    {(bar is { Alive: false } ? "Verbindung zur Anzeige verloren – fluester stop; fluester start" : barInfo)}
                       Erkennung: {engine}

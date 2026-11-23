@@ -84,7 +84,7 @@ sealed class TrayApp : ApplicationContext
         {
             DictationState.Recording => "Flüster – hört zu",
             DictationState.Processing => "Flüster – schreibt",
-            _ => "Flüster – " + store.Current.Hotkey.Label() + " halten",
+            _ => "Flüster – " + store.Current.HotkeyLabel() + " halten",
         };
     }
 
@@ -95,7 +95,7 @@ sealed class TrayApp : ApplicationContext
         {
             DictationState.Recording => "Hört zu …",
             DictationState.Processing => "Schreibt …",
-            _ => $"Bereit – {store.Current.Hotkey.Label()} halten zum Diktieren",
+            _ => $"Bereit – {store.Current.HotkeyLabel()} halten zum Diktieren",
         };
     }
 
@@ -156,7 +156,7 @@ sealed class TrayApp : ApplicationContext
                 // Einmal pro Start erklären, dass Schließen nicht beendet
                 if (closedHintShown) return;
                 closedHintShown = true;
-                tray.ShowBalloonTip(4000, "Flüster läuft weiter", $"{store.Current.Hotkey.Label()} halten, sprechen, loslassen. Fenster und Menü: Symbol hier unten rechts.", ToolTipIcon.None);
+                tray.ShowBalloonTip(4000, "Flüster läuft weiter", $"{store.Current.HotkeyLabel()} halten, sprechen, loslassen. Fenster und Menü: Symbol hier unten rechts.", ToolTipIcon.None);
             };
         }
         settingsForm.Show(page);

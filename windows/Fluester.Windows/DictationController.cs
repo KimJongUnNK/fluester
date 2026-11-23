@@ -47,6 +47,9 @@ sealed class DictationController : IDisposable
         hook.EscapePressed += () => Cancel(explicitly: true);
         hook.ShouldSwallowEscape = () => State != DictationState.Idle;
         recorder.Level += lv => Bar.PushLevel(lv);
+        // Knöpfe auf der Leiste – falls die Taste mal nicht reagiert
+        Bar.StopClicked += () => { if (State == DictationState.Recording) { gestures.Reset(); FinishRecording(); } };
+        Bar.CancelClicked += () => Cancel(explicitly: true);
         tick.Tick += (_, _) =>
         {
             var a = gestures.Tick(Now);
@@ -68,9 +71,11 @@ sealed class DictationController : IDisposable
     {
         // Nur bei einer anderen Taste zurücksetzen: Jedes Speichern (z. B. der Mikrofon-Name beim Aufnahmestart)
         // ließ sonst das Loslassen der gerade gehaltenen Taste verloren gehen – die Aufnahme lief weiter.
-        if (hook.Choice != s.Hotkey)
+        uint customVk = (uint)Math.Max(0, s.CustomHotkeyCode);
+        if (hook.Choice != s.Hotkey || hook.CustomVk != customVk)
         {
             hook.Choice = s.Hotkey;
+            hook.CustomVk = customVk;
             hook.Reset();
         }
         gestures.DoubleTapEnabled = s.HandsFreeDoubleTap;
@@ -79,6 +84,15 @@ sealed class DictationController : IDisposable
         if (State == DictationState.Idle) Bar.Idle();
         StateChanged?.Invoke();
     }
+
+    /// <summary>Nächste gedrückte Taste als Diktat-Taste aufnehmen (Einstellungen › „Eigene Taste …“). Code 0 = abgebrochen.</summary>
+    public void CaptureHotkey(Action<uint, string> done)
+    {
+        if (State != DictationState.Idle) Cancel(explicitly: true);
+        hook.CaptureNext(done);
+    }
+
+    public void CancelHotkeyCapture() => hook.CancelCapture();
 
     /// <summary>Modell vorab laden, damit das erste Diktat schnell ist.</summary>
     public void Prewarm()

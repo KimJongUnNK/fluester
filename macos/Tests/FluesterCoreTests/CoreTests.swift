@@ -369,3 +369,78 @@ final class UpdatesTests: XCTestCase {
         XCTAssertNil(Updates.checksum(in: sums, for: "Fluester-Linux-x64.tar.gz"))
     }
 }
+
+final class CustomHotkeyAndProviderTests: XCTestCase {
+    func testCustomHotkeyRoundTrip() throws {
+        var s = Settings()
+        HotkeyCapture.apply(&s, HotkeyCapture.mac(0x69), code: 0x69, name: HotkeyCapture.macName(0x69))
+        XCTAssertEqual(s.hotkey, .custom)
+        XCTAssertEqual(s.hotkeyLabel, "F13")
+        let back = try JSONDecoder().decode(Settings.self, from: JSONEncoder().encode(s))
+        XCTAssertEqual(back.hotkey, .custom)
+        XCTAssertEqual(back.customHotkeyCode, 0x69)
+        XCTAssertEqual(back.customHotkeyName, "F13")
+        // Ohne Tastencode → Standard
+        let broken = try JSONDecoder().decode(Settings.self, from: Data(#"{"hotkey":"custom"}"#.utf8))
+        XCTAssertEqual(broken.hotkey, .fn)
+        XCTAssertEqual(Settings().hotkeyLabel, "Fn / 🌐")
+    }
+
+    func testCapturedKeys() {
+        XCTAssertEqual(HotkeyCapture.mac(0x3F).choice, .fn)
+        XCTAssertEqual(HotkeyCapture.mac(0x3D).choice, .rightOption)
+        XCTAssertEqual(HotkeyCapture.mac(0x36).choice, .rightCommand)
+        XCTAssertEqual(HotkeyCapture.mac(0x3E).choice, .rightControl)
+        XCTAssertTrue(HotkeyCapture.mac(0x3A).ok)                 // linke Option
+        XCTAssertTrue(HotkeyCapture.mac(0x52).ok)                 // Ziffernblock 0
+        XCTAssertEqual(HotkeyCapture.mac(0x00).error, HotkeyCapture.typingKey)  // A
+        XCTAssertEqual(HotkeyCapture.mac(0x31).error, HotkeyCapture.typingKey)  // Leertaste
+        XCTAssertEqual(HotkeyCapture.mac(0x35).error, HotkeyCapture.cancelled)
+        XCTAssertFalse(HotkeyCapture.mac(0x38).ok)                // ⇧
+        XCTAssertFalse(HotkeyCapture.mac(0x39).ok)                // ⇪
+        var s = Settings()
+        HotkeyCapture.apply(&s, HotkeyCapture.mac(0x00), code: 0, name: "A")
+        XCTAssertEqual(s.hotkey, .fn)
+        XCTAssertEqual(HotkeyCapture.macName(0x3A), "Linke ⌥ Option")
+        XCTAssertEqual(HotkeyCapture.macName(0x52, characters: "0"), "Ziffernblock 0")
+        XCTAssertEqual(HotkeyCapture.macName(0x70), "Taste 112")
+    }
+
+    func testProviders() {
+        XCTAssertEqual(Set(ProviderPreset.all.map(\.id)).count, ProviderPreset.all.count)
+        for p in ProviderPreset.all where p.id != "custom" {
+            XCTAssertNotNil(URL(string: p.baseURL)?.host, p.id)
+            XCTAssertTrue(p.suggestions(transcription: false).contains(p.chatModel), p.id)
+            if p.transcription { XCTAssertTrue(p.suggestions(transcription: true).contains(p.transcriptionModel), p.id) }
+        }
+        XCTAssertEqual(ProviderPreset.forKind(transcription: true).map(\.id), ["groq", "openai", "custom"])
+        XCTAssertEqual(ProviderPreset.byID("anthropic").chatModel, "claude-haiku-5-5")
+        XCTAssertEqual(ProviderPreset.mistral.suggestions(transcription: false, current: "mein-modell").first, "mein-modell")
+        XCTAssertEqual(ProviderPreset.byID("gibts-nicht").id, "groq")
+    }
+
+    func testClaudeHeadersAndTemperature() throws {
+        let c = OpenAICompatibleClient(baseURL: ProviderPreset.anthropic.baseURL, apiKey: "sk-ant-x")
+        XCTAssertTrue(c.isAnthropic)
+        let r = try c.chatRequest(model: "claude-haiku-5-5", system: "s", user: "u")
+        XCTAssertEqual(r.url?.absoluteString, "https://api.anthropic.com/v1/chat/completions")
+        XCTAssertEqual(r.value(forHTTPHeaderField: "x-api-key"), "sk-ant-x")
+        XCTAssertEqual(r.value(forHTTPHeaderField: "anthropic-version"), "2023-06-01")
+        let body = try JSONSerialization.jsonObject(with: r.httpBody!) as! [String: Any]
+        XCTAssertNil(body["temperature"])
+        XCTAssertEqual(body["max_tokens"] as? Int, 8192)
+        let g = try OpenAICompatibleClient(baseURL: ProviderPreset.groq.baseURL, apiKey: "k").chatRequest(model: "llama-3.3-70b-versatile", system: "s", user: "u")
+        XCTAssertNil(g.value(forHTTPHeaderField: "x-api-key"))
+        XCTAssertEqual((try JSONSerialization.jsonObject(with: g.httpBody!) as! [String: Any])["temperature"] as? Double, 0.2)
+        XCTAssertFalse(OpenAICompatibleClient.acceptsTemperature("openai/gpt-5-mini"))
+        XCTAssertTrue(OpenAICompatibleClient.acceptsTemperature("gemini-2.5-flash"))
+    }
+
+    func testModelLists() throws {
+        XCTAssertEqual(try OpenAICompatibleClient.parseModels(Data(#"{"data":[{"id":"whisper-1"},{"id":"gpt-4o-mini"},{"id":"whisper-1"},{}]}"#.utf8)),
+                       ["gpt-4o-mini", "whisper-1"])
+        XCTAssertEqual(try OpenAICompatibleClient.parseModels(Data(#"{"data":[{"id":"models/gemini-2.5-flash"}]}"#.utf8)), ["gemini-2.5-flash"])
+        XCTAssertThrowsError(try OpenAICompatibleClient.parseModels(Data("<html>".utf8)))
+        XCTAssertEqual(OpenAICompatibleClient.speechModels(["gpt-4o", "whisper-1"]), ["whisper-1"])
+    }
+}

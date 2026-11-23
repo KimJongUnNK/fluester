@@ -2,6 +2,15 @@
 
 Alle wichtigen Änderungen an Flüster. Versionen folgen [Semantic Versioning](https://semver.org/lang/de/).
 
+## [1.4.0] – 2026-11-23
+
+Knöpfe auf der Leiste, eigene Diktat-Taste und viel mehr KI-Anbieter.
+
+- **■ und ✕ auf der Leiste:** Während der Aufnahme beendet ■ das Diktat und fügt den Text ein, ✕ verwirft es. Während der Verarbeitung bricht ✕ ab. Hilft, wenn die Taste mal nicht reagiert. Der Klick nimmt der App nicht den Fokus, der Text landet weiter dort, wo der Cursor steht. Außerhalb der Knöpfe gehen Klicks wie bisher durch die Leiste durch. Mac, Windows und Linux.
+- **Eigene Diktat-Taste:** Einstellungen › Allgemein › „Eigene Taste …“ und die gewünschte Taste drücken. Geht mit jeder Taste, die keinen Text tippt: F13–F24, Pause, Einfg, Menü-Taste, Ziffernblock, linke Strg/Alt/⌥/⌘, Makro- und Maustasten, die eine Taste senden. Tasten mit Zeichen (Buchstaben, Leertaste …) und Umschalt lehnt Flüster ab – die wären danach zum Schreiben weg. Drückt man eine der festen Tasten (z. B. Strg rechts), wird die feste Wahl gesetzt. Hinweise, Leiste und Menü zeigen den Namen der eigenen Taste.
+- **Viel mehr KI-Anbieter für die Bereinigung und den Command Mode:** Anthropic (Claude), Google Gemini, Mistral, DeepSeek, xAI (Grok), OpenRouter (hunderte Modelle), LM Studio (lokal) – zusätzlich zu Groq, OpenAI, Ollama und eigenem Server. Jeder Anbieter bringt Modell-Vorschläge mit, das Modell lässt sich frei eintippen, und „Modelle laden“ holt die komplette Liste deines Kontos.
+- **Neuere Modelle laufen:** Claude, GPT-5 und die o-Reihe lehnen eine eigene „Temperatur“ ab – Flüster lässt sie dort weg und versucht es bei anderen Modellen mit derselben Meldung automatisch ohne. Claude bekommt die nötigen Kopfzeilen.
+
 ## [1.3.3] – 2026-11-14
 
 Zweite Fehlersuche: Textregeln, die echte Sätze zerstört haben, und Tastenerkennung, die ausfallen konnte.

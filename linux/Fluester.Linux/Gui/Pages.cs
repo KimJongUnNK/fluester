@@ -84,7 +84,14 @@ sealed partial class Pages : IDisposable
         // Taste
         var key = Ui.Group("Diktat-Taste");
         key.Add(Ui.Combo("Taste", "Halten zum Sprechen. Strg rechts stört beim Tippen am wenigsten.",
-            Enum.GetValues<HotkeyChoice>(), h => h.Label(linux: true), s.Hotkey, v => Update(x => x.Hotkey = v)));
+            Enum.GetValues<HotkeyChoice>(), h => h == HotkeyChoice.Custom && s.CustomHotkeyCode > 0 ? "Eigene: " + s.CustomHotkeyName : h.Label(linux: true), s.Hotkey, v =>
+            {
+                if (v == HotkeyChoice.Custom && Store.Current.CustomHotkeyCode <= 0) CaptureHotkey();
+                else Update(x => x.Hotkey = v);
+            }));
+        var own = Ui.Row("Eigene Taste", "Jede Taste ohne Zeichen: F1–F24, Pause, Einfg, Menü-Taste, Ziffernblock, Makrotasten …");
+        own.AddSuffix(Ui.Button("Taste drücken …", CaptureHotkey));
+        key.Add(own);
         key.Add(Ui.Switch("Doppeltipp: freihändig diktieren", "Zweimal kurz tippen startet, einmal tippen beendet.",
             s.HandsFreeDoubleTap, v => Update(x => x.HandsFreeDoubleTap = v)));
         key.Add(Ui.Switch("Command Mode", "Text markieren, Taste + Umschalt halten, „mach das förmlicher“ sagen. Braucht ein Sprachmodell (KI-Bereinigung).",
@@ -337,8 +344,9 @@ sealed partial class Pages : IDisposable
         var cfg = new ApiConfig(initial.ProviderId, initial.BaseUrl, initial.Model);
         ApiConfig Copy() => new(cfg.ProviderId, cfg.BaseUrl, cfg.Model);
         var g = Ui.Group(title);
-        var presets = transcription ? ProviderPreset.All.Where(p => p.Id != "ollama").ToArray() : ProviderPreset.All;
+        var presets = ProviderPreset.For(transcription);
         Ui.TextField? url = null, model = null, key = null;
+        Ui.PickList? models = null;
         Gtk.Button keyLink = Ui.Button("Schlüssel holen", () =>
         {
             var p = ProviderPreset.ById(cfg.ProviderId);
@@ -360,12 +368,16 @@ sealed partial class Pages : IDisposable
                 url?.Set(cfg.BaseUrl);
                 model?.Set(cfg.Model);
             }
+            models?.Fill(p.Suggestions(transcription, cfg.Model));
             key?.Set(w.Secrets.Get(p.Id) ?? "");
             UpdateLink();
             changed(Copy());
         }));
         url = Ui.TextRow("Server-Adresse", cfg.BaseUrl, changed: t => { cfg.BaseUrl = t.Trim(); changed(Copy()); });
         model = Ui.TextRow("Modell", cfg.Model, changed: t => { cfg.Model = t.Trim(); changed(Copy()); });
+        models = new Ui.PickList("Modell wählen", m => { cfg.Model = m; model.Set(m); changed(Copy()); });
+        models.Fill(ProviderPreset.ById(cfg.ProviderId).Suggestions(transcription, cfg.Model));
+        Ui.AddSuffix(model.Row, models.Button);
         key = Ui.TextRow("API-Schlüssel", w.Secrets.Get(cfg.ProviderId) ?? "", password: true, changed: t => w.Secrets.Set(cfg.ProviderId, t));
         g.Add(url.Row);
         g.Add(model.Row);
@@ -390,11 +402,65 @@ sealed partial class Pages : IDisposable
             catch (Exception e) { Ui.SetSubtitle(testRow, "✗ " + e.Message); }
             finally { test.Sensitive = true; }
         }));
+        Gtk.Button? load = null;
+        load = Ui.Button("Modelle laden", () => Ui.Run(async () =>
+        {
+            w.Secrets.Set(cfg.ProviderId, key.Get());
+            cfg.BaseUrl = url.Get().Trim();
+            load!.Sensitive = false;
+            Ui.SetSubtitle(testRow, "Lade Modelle …");
+            try
+            {
+                var c = Copy();
+                var k = w.Secrets.Get(c.ProviderId);
+                var names = await Task.Run(() => DictationService.ListModelsAsync(c, k, transcription));
+                models.Fill(names);
+                Ui.SetSubtitle(testRow, names.Length == 0 ? "Keine Modelle gefunden" : $"✓ {names.Length} Modelle – rechts im Feld „Modell“ aufklappen");
+                models.Open();
+            }
+            catch (Exception e) { Ui.SetSubtitle(testRow, "✗ " + e.Message); }
+            finally { load.Sensitive = true; }
+        }));
         testRow.AddSuffix(keyLink);
+        testRow.AddSuffix(load);
         testRow.AddSuffix(test);
         g.Add(testRow);
         UpdateLink();
         return g;
+    }
+
+    /// <summary>Kleines Fenster: nächste Taste wird die Diktat-Taste (Code = GDK-Tastencode − 8 = evdev, wie der Dienst ihn liest).</summary>
+    void CaptureHotkey()
+    {
+        var win = Gtk.Window.New();
+        win.Title = "Eigene Taste";
+        win.Modal = true;
+        win.SetTransientFor(w.Window);
+        win.SetDefaultSize(380, 150);
+        win.Resizable = false;
+        var hint = Ui.Label("Drück jetzt die gewünschte Taste …", "title-3");
+        var sub = Ui.Label("Esc bricht ab", "dim-label");
+        sub.Wrap = true;
+        win.Child = Ui.Margins(Ui.VBox(10, hint, sub), 28);
+        var keys = Gtk.EventControllerKey.New();
+        bool done = false;
+        keys.OnKeyPressed += (_, e) =>
+        {
+            if (done) return true;
+            int code = (int)e.Keycode - 8;
+            var v = HotkeyCapture.Linux(code);
+            if (code == 1) { done = true; win.Close(); w.Rebuild(Page.General); return true; }
+            if (!v.Ok) { sub.SetText(v.Error!); return true; }
+            done = true;
+            var name = HotkeyCapture.LinuxKeyName(Gdk.Functions.KeyvalName(e.Keyval), code);
+            Update(x => HotkeyCapture.Apply(x, v, code, name));
+            win.Close();
+            w.Rebuild(Page.General);
+            return true;
+        };
+        win.AddController(keys);
+        win.OnCloseRequest += (_, _) => { if (!done) w.Rebuild(Page.General); return false; };
+        win.Present();
     }
 
     // ───────────────────────── KI-Bereinigung
@@ -412,7 +478,7 @@ sealed partial class Pages : IDisposable
         if (s.Cleanup == CleanupChoice.Llm)
         {
             page.Add(ProviderGroup("Sprachmodell", s.CloudChat, transcription: false, cfg => Update(x => x.CloudChat = cfg)));
-            page.Add(Ui.Group("", "Ollama läuft komplett lokal: ollama.com laden, dann im Terminal „ollama pull qwen2.5:7b“. Fällt die KI aus, gelten automatisch die Regeln."));
+            page.Add(Ui.Group("", "Claude, GPT, Gemini, Mistral, DeepSeek, Grok, hunderte weitere über OpenRouter – oder komplett lokal mit Ollama bzw. LM Studio. „Modelle laden“ zeigt alles, was dein Konto anbietet. Fällt die KI aus, gelten automatisch die Regeln."));
         }
         var rules = Ui.Group("Regeln");
         rules.Add(Ui.Switch("Füllwörter und Stotterer entfernen", "äh, ähm, um, uh …", s.RemoveFillers, v => Update(x => x.RemoveFillers = v)));

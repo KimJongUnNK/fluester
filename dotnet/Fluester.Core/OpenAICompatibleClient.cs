@@ -30,7 +30,7 @@ public sealed class OpenAICompatibleClient(string baseUrl, string? apiKey, TimeS
     public HttpRequestMessage TranscriptionRequest(byte[] wav, string model, string? language, string? prompt)
     {
         var req = new HttpRequestMessage(HttpMethod.Post, Url("/audio/transcriptions"));
-        if (!string.IsNullOrEmpty(ApiKey)) req.Headers.Authorization = new AuthenticationHeaderValue("Bearer", ApiKey);
+        Authorize(req);
         var form = new MultipartFormDataContent("fluester-" + Guid.NewGuid().ToString("N"));
         var file = new ByteArrayContent(wav);
         file.Headers.ContentType = new MediaTypeHeaderValue("audio/wav");
@@ -60,26 +60,82 @@ public sealed class OpenAICompatibleClient(string baseUrl, string? apiKey, TimeS
 
     // ───────────── Chat
 
-    public HttpRequestMessage ChatRequest(string model, string system, string user, double temperature = 0.2)
+    /// <summary>Anthropic-Schnittstelle (Claude) – braucht zusätzlich x-api-key und eine Versionsangabe.</summary>
+    public bool IsAnthropic => Uri.TryCreate((BaseUrl ?? "").Trim(), UriKind.Absolute, out var u) && u.Host.EndsWith("anthropic.com", StringComparison.OrdinalIgnoreCase);
+
+    /// <summary>Neuere Modelle (Claude, GPT-5, o-Reihe) lehnen eine eigene Temperatur ab.</summary>
+    public static bool AcceptsTemperature(string model)
+    {
+        var m = (model ?? "").Trim().ToLowerInvariant();
+        var slash = m.LastIndexOf('/');
+        if (slash >= 0) m = m[(slash + 1)..];
+        return !(m.StartsWith("claude") || m.StartsWith("gpt-5") || m.StartsWith("o1") || m.StartsWith("o3") || m.StartsWith("o4"));
+    }
+
+    void Authorize(HttpRequestMessage req)
+    {
+        if (string.IsNullOrEmpty(ApiKey)) return;
+        req.Headers.Authorization = new AuthenticationHeaderValue("Bearer", ApiKey);
+        if (IsAnthropic)
+        {
+            req.Headers.TryAddWithoutValidation("x-api-key", ApiKey);
+            req.Headers.TryAddWithoutValidation("anthropic-version", "2023-06-01");
+        }
+    }
+
+    public HttpRequestMessage ChatRequest(string model, string system, string user, double? temperature = 0.2)
     {
         var req = new HttpRequestMessage(HttpMethod.Post, Url("/chat/completions"));
-        if (!string.IsNullOrEmpty(ApiKey)) req.Headers.Authorization = new AuthenticationHeaderValue("Bearer", ApiKey);
-        var body = new JsonObject
+        Authorize(req);
+        var body = new JsonObject { ["model"] = model };
+        if (temperature is { } t && AcceptsTemperature(model)) body["temperature"] = t;
+        // Claude verlangt eine Obergrenze für die Antwortlänge
+        if (IsAnthropic) body["max_tokens"] = 8192;
+        body["messages"] = new JsonArray
         {
-            ["model"] = model,
-            ["temperature"] = temperature,
-            ["messages"] = new JsonArray
-            {
-                new JsonObject { ["role"] = "system", ["content"] = system },
-                new JsonObject { ["role"] = "user", ["content"] = user },
-            },
+            new JsonObject { ["role"] = "system", ["content"] = system },
+            new JsonObject { ["role"] = "user", ["content"] = user },
         };
         req.Content = new StringContent(body.ToJsonString(), Encoding.UTF8, "application/json");
         return req;
     }
 
-    public async Task<string> ChatAsync(string model, string system, string user, CancellationToken ct = default) =>
-        ParseChat(await SendAsync(ChatRequest(model, system, user), ct));
+    public async Task<string> ChatAsync(string model, string system, string user, CancellationToken ct = default)
+    {
+        try
+        {
+            return ParseChat(await SendAsync(ChatRequest(model, system, user), ct));
+        }
+        catch (FluesterException e) when (e.Message.Contains("temperature", StringComparison.OrdinalIgnoreCase))
+        {
+            // Modell kennt keine eigene Temperatur – ohne nochmal
+            return ParseChat(await SendAsync(ChatRequest(model, system, user, null), ct));
+        }
+    }
+
+    // ───────────── Modelle
+
+    /// <summary>Modelle, die der Anbieter anbietet (GET /models), sortiert.</summary>
+    public async Task<string[]> ListModelsAsync(CancellationToken ct = default)
+    {
+        var req = new HttpRequestMessage(HttpMethod.Get, Url("/models"));
+        Authorize(req);
+        return ParseModels(await SendAsync(req, ct));
+    }
+
+    public static string[] ParseModels(string body)
+    {
+        try
+        {
+            if (JsonNode.Parse(body) is JsonObject o && (o["data"] ?? o["models"]) is JsonArray arr)
+                return arr.Select(m => m is JsonObject mo ? (mo["id"] ?? mo["name"] ?? mo["model"])?.GetValue<string>() : null)
+                    .Where(id => !string.IsNullOrWhiteSpace(id))
+                    .Select(id => id!.StartsWith("models/") ? id[7..] : id!)
+                    .Distinct().Order(StringComparer.OrdinalIgnoreCase).ToArray();
+        }
+        catch (Exception e) when (e is JsonException or InvalidOperationException) { }
+        throw new FluesterException("Unerwartete Antwort beim Laden der Modelle");
+    }
 
     public static string ParseChat(string body)
     {

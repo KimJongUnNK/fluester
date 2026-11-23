@@ -262,6 +262,61 @@ static class Ui
         return new TextField(row, () => editable.GetText() ?? "", t => { quiet = true; editable.SetText(t); quiet = false; });
     }
 
+    /// <summary>Knopf rechts in eine Zeile aus <see cref="TextRow"/> setzen.</summary>
+    public static void AddSuffix(Gtk.Widget row, Gtk.Widget suffix)
+    {
+        suffix.Valign = Gtk.Align.Center;
+        if (row is Adw.EntryRow er) er.AddSuffix(suffix);
+        else if (row is Adw.ActionRow ar) ar.AddSuffix(suffix);
+    }
+
+    /// <summary>Aufklapp-Liste zum Auswählen (z. B. Modelle); <c>Fill</c> ersetzt die Einträge.</summary>
+    public sealed class PickList
+    {
+        public readonly Gtk.MenuButton Button = Gtk.MenuButton.New();
+        readonly Gtk.Popover pop = Gtk.Popover.New();
+        readonly Gtk.Box box = VBox(0);
+        readonly Action<string> picked;
+
+        public PickList(string tooltip, Action<string> picked)
+        {
+            this.picked = picked;
+            Button.IconName = "pan-down-symbolic";
+            Button.TooltipText = tooltip;
+            Button.AddCssClass("flat");
+            var sw = Gtk.ScrolledWindow.New();
+            sw.SetPolicy(Gtk.PolicyType.Never, Gtk.PolicyType.Automatic);
+            sw.PropagateNaturalHeight = true;
+            sw.MaxContentHeight = 360;
+            sw.Child = box;
+            pop.Child = sw;
+            Button.Popover = pop;
+        }
+
+        public void Fill(IEnumerable<string> items)
+        {
+            while (box.GetFirstChild() is { } c) box.Remove(c);
+            foreach (var item in items)
+            {
+                var name = item;
+                var b = Button2(name, () => { pop.Popdown(); picked(name); });
+                box.Append(b);
+            }
+            Button.Sensitive = box.GetFirstChild() != null;
+        }
+
+        public void Open() { if (Button.Sensitive) Button.Popup(); }
+
+        static Gtk.Button Button2(string label, Action click)
+        {
+            var b = Gtk.Button.NewWithLabel(label);
+            b.AddCssClass("flat");
+            if (b.Child is Gtk.Label l) l.Xalign = 0;
+            b.OnClicked += (_, _) => Safe(click);
+            return b;
+        }
+    }
+
     /// <summary>Mehrzeiliges Textfeld mit Rahmen.</summary>
     public static Gtk.TextView TextArea(string text, int minHeight, out Gtk.Widget framed)
     {

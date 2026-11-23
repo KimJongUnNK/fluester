@@ -114,8 +114,32 @@ sealed class SettingsForm : Form
         pb.Header("Allgemein", "Taste halten, sprechen, loslassen – der Text landet dort, wo der Cursor steht.");
         pb.Section("Diktat-Taste");
         var c = pb.Card();
-        c.Row("Taste", Controls2.Combo(Enum.GetValues<HotkeyChoice>(), h => h.Label(), s.Hotkey, v => Update(x => x.Hotkey = v)),
-            "Halten zum Sprechen. Strg rechts stört beim Tippen am wenigsten.");
+        var keyStatus = new Label { AutoSize = true, ForeColor = Theme.Secondary, MaximumSize = new Size(420, 0) };
+        var record = Theme.SecondaryButton("Eigene Taste …");
+        void Capture()
+        {
+            record.Enabled = false;
+            keyStatus.ForeColor = Theme.Accent;
+            keyStatus.Text = "Drück jetzt die gewünschte Taste … (Esc bricht ab)";
+            controller.CaptureHotkey((vk, name) =>
+            {
+                if (IsDisposed) return;
+                var v = HotkeyCapture.Windows(vk);
+                if (v.Ok) Update(x => HotkeyCapture.Apply(x, v, (int)vk, name));
+                Show(current);
+                if (!v.Ok && v.Error != "Abgebrochen") MessageBox.Show(this, v.Error, "Flüster");
+            });
+        }
+        record.Click += (_, _) => Capture();
+        FormClosed += (_, _) => controller.CancelHotkeyCapture();
+        c.Row("Taste", Controls2.Combo(Enum.GetValues<HotkeyChoice>(),
+            h => h == HotkeyChoice.Custom && s.CustomHotkeyCode > 0 ? "Eigene: " + s.CustomHotkeyName : h.Label(), s.Hotkey, v =>
+            {
+                if (v == HotkeyChoice.Custom && store.Current.CustomHotkeyCode <= 0) Capture();
+                else Update(x => x.Hotkey = v);
+            }),
+            "Halten zum Sprechen. Strg rechts stört beim Tippen am wenigsten. Eigene Taste: z. B. F13, Pause, Einfg oder eine Maus-/Makrotaste, die eine Taste sendet.");
+        c.Full(Controls2.Line(record, keyStatus));
         c.Check("Doppeltipp: freihändig diktieren (nochmal tippen zum Beenden)", s.HandsFreeDoubleTap, v => Update(x => x.HandsFreeDoubleTap = v));
         c.Check("Command Mode: Taste + Umschalt halten, markierten Text per Sprache bearbeiten", s.CommandModeEnabled, v => Update(x => x.CommandModeEnabled = v),
             "z. B. Text markieren → Strg rechts + Umschalt halten → „mach das förmlicher“. Braucht ein Sprachmodell (KI-Bereinigung).");
@@ -202,7 +226,7 @@ sealed class SettingsForm : Form
         {
             pb.Section("Sprachmodell");
             pb.Add(new ProviderEditor(s.CloudChat, secrets, transcription: false, cfg => Update(x => x.CloudChat = cfg)));
-            pb.Note("Ollama läuft komplett lokal: ollama.com laden, dann im Terminal „ollama pull qwen2.5:7b“. Fällt die KI aus, gelten automatisch die Regeln.");
+            pb.Note("Claude, GPT, Gemini, Mistral, DeepSeek, Grok, hunderte weitere über OpenRouter – oder komplett lokal mit Ollama bzw. LM Studio. „Modelle laden“ zeigt alles, was dein Konto anbietet. Fällt die KI aus, gelten automatisch die Regeln.");
         }
         pb.Section("Regeln");
         var r = pb.Card();
@@ -524,7 +548,18 @@ sealed class ProviderEditor : Card
     {
         var cfg = new ApiConfig(initial.ProviderId, initial.BaseUrl, initial.Model);
         var url = new TextBox { Width = 320, Text = cfg.BaseUrl, BackColor = Theme.Window, ForeColor = Theme.Text, BorderStyle = BorderStyle.FixedSingle };
-        var model = new TextBox { Width = 320, Text = cfg.Model, BackColor = Theme.Window, ForeColor = Theme.Text, BorderStyle = BorderStyle.FixedSingle };
+        // Modell: frei eintippen oder aus den Vorschlägen bzw. der Liste des Anbieters wählen
+        var model = new ComboBox { Width = 320, Text = cfg.Model, DropDownStyle = ComboBoxStyle.DropDown, FlatStyle = FlatStyle.Flat, BackColor = Theme.Window, ForeColor = Theme.Text };
+        void FillModels(IEnumerable<string> names)
+        {
+            var keep = model.Text;
+            model.BeginUpdate();
+            model.Items.Clear();
+            foreach (var n in names) model.Items.Add(n);
+            model.EndUpdate();
+            model.Text = keep;
+        }
+        FillModels(ProviderPreset.ById(cfg.ProviderId).Suggestions(transcription, cfg.Model));
         var key = new TextBox { Width = 320, UseSystemPasswordChar = true, Text = secrets.Get(cfg.ProviderId) ?? "", BackColor = Theme.Window, ForeColor = Theme.Text, BorderStyle = BorderStyle.FixedSingle };
         var keyLink = new LinkLabel { AutoSize = true, LinkColor = Theme.Accent, BackColor = Color.Transparent };
         var result = new Label { AutoSize = true, ForeColor = Theme.Secondary, MaximumSize = new Size(420, 0) };
@@ -535,7 +570,7 @@ sealed class ProviderEditor : Card
             keyLink.Tag = p.KeyUrl;
         }
         keyLink.LinkClicked += (_, _) => { if (keyLink.Tag is string u && u.Length > 0) Controls2.Open(u); };
-        var presets = transcription ? ProviderPreset.All.Where(p => p.Id != "ollama").ToArray() : ProviderPreset.All;
+        var presets = ProviderPreset.For(transcription);
         Row("Anbieter", Controls2.Combo(presets, p => p.Name, ProviderPreset.ById(cfg.ProviderId), p =>
         {
             cfg.ProviderId = p.Id;
@@ -546,6 +581,7 @@ sealed class ProviderEditor : Card
                 url.Text = cfg.BaseUrl;
                 model.Text = cfg.Model;
             }
+            FillModels(p.Suggestions(transcription, cfg.Model));
             key.Text = secrets.Get(p.Id) ?? "";
             UpdateKeyLink();
             changed(cfg);
@@ -555,6 +591,10 @@ sealed class ProviderEditor : Card
         Row("API-Schlüssel", key, "Wird verschlüsselt gespeichert (nur dein Windows-Konto kann ihn lesen).");
         url.Leave += (_, _) => { cfg.BaseUrl = url.Text.Trim(); changed(cfg); };
         model.Leave += (_, _) => { cfg.Model = model.Text.Trim(); changed(cfg); };
+        model.SelectionChangeCommitted += (_, _) =>
+        {
+            if (model.SelectedItem is string m) { cfg.Model = m; changed(cfg); }
+        };
         key.Leave += (_, _) => secrets.Set(cfg.ProviderId, key.Text);
         var test = Theme.SecondaryButton("Verbindung testen");
         test.Click += async (_, _) =>
@@ -577,7 +617,30 @@ sealed class ProviderEditor : Card
             }
             test.Enabled = true;
         };
+        var load = Theme.SecondaryButton("Modelle laden");
+        load.Click += async (_, _) =>
+        {
+            secrets.Set(cfg.ProviderId, key.Text);
+            cfg.BaseUrl = url.Text.Trim();
+            load.Enabled = false;
+            result.ForeColor = Theme.Secondary;
+            result.Text = "Lade Modelle …";
+            try
+            {
+                var names = await DictationService.ListModelsAsync(cfg, secrets.Get(cfg.ProviderId), transcription);
+                FillModels(names);
+                result.Text = names.Length == 0 ? "Keine Modelle gefunden" : $"✓ {names.Length} Modelle – im Feld „Modell“ aufklappen";
+                result.ForeColor = Theme.Good;
+                if (names.Length > 0) model.DroppedDown = true;
+            }
+            catch (Exception e)
+            {
+                result.Text = e.Message;
+                result.ForeColor = Theme.Warn;
+            }
+            load.Enabled = true;
+        };
         UpdateKeyLink();
-        Full(Controls2.Line(test, keyLink, result));
+        Full(Controls2.Line(test, load, keyLink, result));
     }
 }

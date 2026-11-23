@@ -28,7 +28,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         store.$s
             .dropFirst()
             .debounce(for: .milliseconds(400), scheduler: RunLoop.main)
-            .removeDuplicates { $0.hotkey == $1.hotkey && $0.engine == $1.engine && $0.whisperModelID == $1.whisperModelID
+            .removeDuplicates { $0.hotkey == $1.hotkey && $0.customHotkeyCode == $1.customHotkeyCode && $0.customHotkeyName == $1.customHotkeyName && $0.engine == $1.engine && $0.whisperModelID == $1.whisperModelID
                 && $0.language == $1.language && $0.handsFreeDoubleTap == $1.handsFreeDoubleTap && $0.showIdleBar == $1.showIdleBar }
             .sink { [weak self] _ in
                 MainActor.assumeIsolated { self?.controller.applySettings() }
@@ -164,7 +164,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         if !controller.hotkeyActive { return "Bedienungshilfen fehlen – Taste inaktiv" }
         if !Permissions.microphoneGranted { return "Mikrofon nicht freigegeben" }
         switch controller.state {
-        case .idle: return "Bereit – \(store.s.hotkey.label) halten zum Diktieren"
+        case .idle: return "Bereit – \(store.s.hotkeyLabel) halten zum Diktieren"
         case .recording: return "Hört zu …"
         case .processing: return "Schreibt …"
         }
@@ -252,5 +252,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
 
     // Für die Einstellungen
     func restartHotkey() { controller.startHotkey() }
+    /// Während „Eigene Taste …“ aufnimmt, soll die alte Taste kein Diktat starten.
+    func setHotkeySuspended(_ on: Bool) { controller.setHotkeySuspended(on) }
     var hotkeyActive: Bool { controller.hotkeyActive }
 }

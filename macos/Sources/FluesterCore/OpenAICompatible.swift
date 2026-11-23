@@ -57,12 +57,34 @@ public struct OpenAICompatibleClient: Sendable {
         return u
     }
 
+    /// Anthropic-Schnittstelle (Claude) – braucht zusätzlich x-api-key und eine Versionsangabe.
+    public var isAnthropic: Bool {
+        guard let host = URL(string: baseURL.trimmingCharacters(in: .whitespacesAndNewlines))?.host?.lowercased() else { return false }
+        return host.hasSuffix("anthropic.com")
+    }
+
+    /// Neuere Modelle (Claude, GPT-5, o-Reihe) lehnen eine eigene Temperatur ab.
+    public static func acceptsTemperature(_ model: String) -> Bool {
+        var m = model.trimmingCharacters(in: .whitespaces).lowercased()
+        if let slash = m.lastIndex(of: "/") { m = String(m[m.index(after: slash)...]) }
+        return !["claude", "gpt-5", "o1", "o3", "o4"].contains { m.hasPrefix($0) }
+    }
+
+    func authorize(_ req: inout URLRequest) {
+        guard let k = apiKey, !k.isEmpty else { return }
+        req.setValue("Bearer \(k)", forHTTPHeaderField: "Authorization")
+        if isAnthropic {
+            req.setValue(k, forHTTPHeaderField: "x-api-key")
+            req.setValue("2023-06-01", forHTTPHeaderField: "anthropic-version")
+        }
+    }
+
     // MARK: Spracherkennung
 
     public func transcriptionRequest(wav: Data, model: String, language: String?, prompt: String?) throws -> URLRequest {
         var req = URLRequest(url: try url("/audio/transcriptions"), timeoutInterval: timeout)
         req.httpMethod = "POST"
-        if let k = apiKey, !k.isEmpty { req.setValue("Bearer \(k)", forHTTPHeaderField: "Authorization") }
+        authorize(&req)
         var form = MultipartForm()
         form.addFile("file", filename: "diktat.wav", mime: "audio/wav", data: wav)
         form.add("model", model)
@@ -91,23 +113,60 @@ public struct OpenAICompatibleClient: Sendable {
 
     // MARK: Chat
 
-    public func chatRequest(model: String, system: String, user: String, temperature: Double = 0.2) throws -> URLRequest {
+    public func chatRequest(model: String, system: String, user: String, temperature: Double? = 0.2) throws -> URLRequest {
         var req = URLRequest(url: try url("/chat/completions"), timeoutInterval: timeout)
         req.httpMethod = "POST"
-        if let k = apiKey, !k.isEmpty { req.setValue("Bearer \(k)", forHTTPHeaderField: "Authorization") }
+        authorize(&req)
         req.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        let body: [String: Any] = [
+        var body: [String: Any] = [
             "model": model,
-            "temperature": temperature,
             "messages": [["role": "system", "content": system], ["role": "user", "content": user]]
         ]
+        if let t = temperature, Self.acceptsTemperature(model) { body["temperature"] = t }
+        // Claude verlangt eine Obergrenze für die Antwortlänge
+        if isAnthropic { body["max_tokens"] = 8192 }
         req.httpBody = try JSONSerialization.data(withJSONObject: body)
         return req
     }
 
     public func chat(model: String, system: String, user: String) async throws -> String {
-        let data = try await send(try chatRequest(model: model, system: system, user: user))
-        return try Self.parseChat(data)
+        do {
+            return try Self.parseChat(try await send(try chatRequest(model: model, system: system, user: user)))
+        } catch let e as FluesterError where e.message.lowercased().contains("temperature") {
+            // Modell kennt keine eigene Temperatur – ohne nochmal
+            return try Self.parseChat(try await send(try chatRequest(model: model, system: system, user: user, temperature: nil)))
+        }
+    }
+
+    // MARK: Modelle
+
+    /// Modelle, die der Anbieter anbietet (GET /models), sortiert.
+    public func listModels() async throws -> [String] {
+        var req = URLRequest(url: try url("/models"), timeoutInterval: timeout)
+        authorize(&req)
+        return try Self.parseModels(try await send(req))
+    }
+
+    public static func parseModels(_ data: Data) throws -> [String] {
+        guard let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let arr = (obj["data"] ?? obj["models"]) as? [Any] else {
+            throw FluesterError("Unerwartete Antwort beim Laden der Modelle")
+        }
+        var seen = Set<String>()
+        var out: [String] = []
+        for item in arr {
+            guard let m = item as? [String: Any], let raw = (m["id"] ?? m["name"] ?? m["model"]) as? String else { continue }
+            var id = raw.trimmingCharacters(in: .whitespaces)
+            if id.hasPrefix("models/") { id.removeFirst(7) }
+            if !id.isEmpty, seen.insert(id).inserted { out.append(id) }
+        }
+        return out.sorted { $0.localizedCaseInsensitiveCompare($1) == .orderedAscending }
+    }
+
+    /// Für die Erkennung nur Sprach-Modelle, wenn erkennbar.
+    public static func speechModels(_ all: [String]) -> [String] {
+        let speech = all.filter { let l = $0.lowercased(); return l.contains("whisper") || l.contains("transcribe") || l.contains("voxtral") }
+        return speech.isEmpty ? all : speech
     }
 
     public static func parseChat(_ data: Data) throws -> String {

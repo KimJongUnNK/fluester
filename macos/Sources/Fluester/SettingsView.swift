@@ -88,7 +88,7 @@ struct SettingsView: View {
 
     @ViewBuilder private var detail: some View {
         switch tabState.tab {
-        case .general: GeneralPane(store: store)
+        case .general: GeneralPane(store: store, delegate: delegate)
         case .recognition: RecognitionPane(store: store)
         case .ai: AIPane(store: store)
         case .styles: StylesPane(store: store)
@@ -105,6 +105,10 @@ struct SettingsView: View {
 
 struct GeneralPane: View {
     @ObservedObject var store: SettingsStore
+    let delegate: AppDelegate
+    @State private var capturing = false
+    @State private var captureMessage: String?
+    @State private var captureMonitor: Any?
     @State private var devices: [AudioDevices.Device] = []
     @State private var defaultMic: String?
     @State private var loginError: String?
@@ -112,8 +116,18 @@ struct GeneralPane: View {
     var body: some View {
         Form {
             Section {
-                Picker("Diktat-Taste", selection: $store.s.hotkey) {
-                    ForEach(HotkeyChoice.allCases) { Text($0.label).tag($0) }
+                Picker("Diktat-Taste", selection: Binding(get: { store.s.hotkey }, set: { v in
+                    if v == .custom && store.s.customHotkeyCode < 0 { startCapture() } else { store.s.hotkey = v }
+                })) {
+                    ForEach(HotkeyChoice.allCases) { h in
+                        Text(h == .custom && store.s.customHotkeyCode >= 0 ? "Eigene: \(store.s.customHotkeyName)" : h.label).tag(h)
+                    }
+                }
+                HStack {
+                    Button(capturing ? "Drück jetzt die Taste … (Esc bricht ab)" : "Eigene Taste …") {
+                        capturing ? stopCapture() : startCapture()
+                    }
+                    if let m = captureMessage { Text(m).font(.callout).foregroundStyle(.orange) }
                 }
                 Toggle("Doppeltipp: freihändig diktieren (nochmal tippen zum Beenden)", isOn: $store.s.handsFreeDoubleTap)
                 Toggle("Command Mode: Taste + ⌃ halten, markierten Text per Sprache bearbeiten", isOn: $store.s.commandModeEnabled)
@@ -164,10 +178,61 @@ struct GeneralPane: View {
         }
         .formStyle(.grouped)
         .onAppear { reloadDevices() }
+        .onDisappear { stopCapture() }
         .onReceive(NotificationCenter.default.publisher(for: AudioDevices.changed)) { _ in reloadDevices() }
         .onChange(of: store.s.microphoneUID) { _, uid in
             if let d = devices.first(where: { $0.uid == uid }) { store.s.microphoneName = d.name } else if uid.isEmpty { store.s.microphoneName = "" }
         }
+    }
+
+    /// Nächste Taste im Einstellungsfenster wird die Diktat-Taste. Die alte Taste ist solange still.
+    private func startCapture() {
+        stopCapture()
+        capturing = true
+        captureMessage = nil
+        delegate.setHotkeySuspended(true)
+        captureMonitor = NSEvent.addLocalMonitorForEvents(matching: [.keyDown, .flagsChanged]) { e in
+            // Lokale Monitore laufen auf dem Haupt-Thread
+            MainActor.assumeIsolated { handleCapture(e) }
+            return nil
+        }
+    }
+
+    private func handleCapture(_ e: NSEvent) {
+            let code = Int(e.keyCode)
+            if e.type == .flagsChanged {
+                // Nur das Drücken eines Modifiers zählt, nicht das Loslassen
+                let f: NSEvent.ModifierFlags
+                switch code {
+                case 0x37, 0x36: f = .command
+                case 0x3A, 0x3D: f = .option
+                case 0x3B, 0x3E: f = .control
+                case 0x38, 0x3C: f = .shift
+                case 0x3F: f = .function
+                case 0x39: f = .capsLock
+                default: return
+                }
+                if !e.modifierFlags.contains(f) && code != 0x39 { return }
+            } else if e.isARepeat {
+                return
+            }
+            let v = HotkeyCapture.mac(code)
+            if v.ok {
+                let name = HotkeyCapture.macName(code, characters: e.type == .keyDown ? e.charactersIgnoringModifiers : nil)
+                HotkeyCapture.apply(&store.s, v, code: code, name: name)
+                stopCapture()
+            } else if v.error == HotkeyCapture.cancelled {
+                stopCapture()
+            } else {
+                captureMessage = v.error
+            }
+    }
+
+    private func stopCapture() {
+        if let m = captureMonitor { NSEvent.removeMonitor(m) }
+        captureMonitor = nil
+        if capturing { delegate.setHotkeySuspended(false) }
+        capturing = false
     }
 
     /// Liste neu lesen (auch beim An-/Abstecken) und ein umgestecktes Mikrofon unter seiner neuen UID übernehmen.
@@ -339,7 +404,7 @@ struct CopyableCommand: View {
     }
 }
 
-// MARK: - Anbieter (Groq, OpenAI, Ollama, eigener)
+// MARK: - Anbieter (Groq, OpenAI, Claude, Gemini, Mistral, lokal, eigener …)
 
 struct ProviderEditor: View {
     enum Kind { case transcription, chat }
@@ -348,16 +413,17 @@ struct ProviderEditor: View {
     @State private var key = ""
     @State private var testResult: String?
     @State private var testing = false
+    @State private var loaded: [String]?
+    @State private var loading = false
 
-    private var presets: [ProviderPreset] {
-        kind == .transcription ? ProviderPreset.all.filter { $0.id != "ollama" } : ProviderPreset.all
-    }
+    private var presets: [ProviderPreset] { ProviderPreset.forKind(transcription: kind == .transcription) }
 
     var body: some View {
         let preset = ProviderPreset.byID(config.providerID)
         Picker("Anbieter", selection: Binding(get: { config.providerID }, set: { id in
             let p = ProviderPreset.byID(id)
             config.providerID = id
+            loaded = nil
             if id != "custom" {
                 config.baseURL = p.baseURL
                 config.model = kind == .transcription ? p.transcriptionModel : p.chatModel
@@ -366,7 +432,17 @@ struct ProviderEditor: View {
             ForEach(presets) { Text($0.name).tag($0.id) }
         }
         TextField("Server-Adresse", text: $config.baseURL, prompt: Text("https://…/v1"))
-        TextField("Modell", text: $config.model, prompt: Text(kind == .transcription ? "whisper-large-v3-turbo" : "llama-3.3-70b-versatile"))
+        HStack {
+            TextField("Modell", text: $config.model, prompt: Text(kind == .transcription ? "whisper-large-v3-turbo" : "llama-3.3-70b-versatile"))
+            let names = loaded ?? preset.suggestions(transcription: kind == .transcription, current: config.model)
+            Menu {
+                ForEach(names, id: \.self) { m in Button(m) { config.model = m } }
+            } label: { Image(systemName: "chevron.down") }
+            .menuIndicator(.hidden)
+            .fixedSize()
+            .disabled(names.isEmpty)
+            .help("Modell wählen")
+        }
         if preset.needsKey || preset.id == "custom" {
             HStack {
                 SecureField("API-Schlüssel", text: $key, prompt: Text(preset.needsKey ? "erforderlich" : "optional"))
@@ -383,11 +459,31 @@ struct ProviderEditor: View {
         }
         HStack {
             Button(testing ? "Teste …" : "Verbindung testen") { test() }.disabled(testing)
+            Button(loading ? "Lade …" : "Modelle laden") { loadModels() }.disabled(loading)
             if let r = testResult { Text(r).foregroundStyle(r.hasPrefix("✓") ? Color.green : Color.red).lineLimit(2) }
         }
         .onAppear { key = Keychain.apiKey(for: config.providerID) ?? "" }
         .onChange(of: config.providerID) { _, id in key = Keychain.apiKey(for: id) ?? "" }
         .onChange(of: key) { _, k in Keychain.setAPIKey(k, for: config.providerID) }
+    }
+
+    private func loadModels() {
+        loading = true
+        testResult = nil
+        let cfg = config
+        let k = key
+        let speech = kind == .transcription
+        Task {
+            do {
+                let all = try await OpenAICompatibleClient(baseURL: cfg.baseURL, apiKey: k, timeout: 20).listModels()
+                let names = speech ? OpenAICompatibleClient.speechModels(all) : all
+                loaded = names
+                testResult = names.isEmpty ? "Keine Modelle gefunden" : "✓ \(names.count) Modelle – über ⌄ neben „Modell“ wählen"
+            } catch {
+                testResult = error.localizedDescription
+            }
+            loading = false
+        }
     }
 
     private func test() {

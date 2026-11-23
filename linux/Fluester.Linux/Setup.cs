@@ -251,11 +251,16 @@ static class Setup
 
         // 4) Taste
         Title("4  Diktat-Taste");
-        var keys = Enum.GetValues<HotkeyChoice>();
+        var keys = Enum.GetValues<HotkeyChoice>().Where(h => h != HotkeyChoice.Custom).ToArray();
         Info("Halten = sprechen, doppelt tippen = freihändig, + Umschalt = Command Mode.");
         Info("Hinweis: Unter Linux lässt sich die Taste nicht „schlucken“ – Feststelltaste schaltet weiter um, daher Strg rechts empfohlen.");
-        int k = Choose("Taste?", keys.Select(h => h.Label(linux: true)).ToArray(), Array.IndexOf(keys, store.Current.Hotkey));
-        store.Update(s => s.Hotkey = keys[k]);
+        if (store.Current.Hotkey == HotkeyChoice.Custom)
+            Info($"Eigene Taste: {store.Current.HotkeyLabel(linux: true)} (ändern im App-Fenster unter Allgemein)");
+        else
+        {
+            int k = Choose("Taste? (eigene Taste: im App-Fenster unter Allgemein)", keys.Select(h => h.Label(linux: true)).ToArray(), Math.Max(0, Array.IndexOf(keys, store.Current.Hotkey)));
+            store.Update(s => s.Hotkey = keys[k]);
+        }
 
         // 5) Erkennung
         Title("5  Erkennung");
@@ -312,7 +317,7 @@ static class Setup
         try { Gui.Integration.Install(); } catch (Exception e) { Log.Write("App-Menü-Eintrag: " + e.Message); }
 
         Title("Fertig");
-        Info($"Diktieren: in ein Textfeld klicken, {store.Current.Hotkey.Label(linux: true)} halten, sprechen, loslassen.");
+        Info($"Diktieren: in ein Textfeld klicken, {store.Current.HotkeyLabel(linux: true)} halten, sprechen, loslassen.");
         if (Gui.Integration.LibrariesAvailable(out _)) Info("Einstellungen, Verlauf und Wörterbuch: „Flüster“ im App-Menü (oder fluester app)");
         Info("Befehle: fluester status · fluester mic · fluester toggle · fluester config · fluester help");
         if (needRelogin)

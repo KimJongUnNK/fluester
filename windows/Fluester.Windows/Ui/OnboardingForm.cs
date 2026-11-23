@@ -59,7 +59,7 @@ sealed class OnboardingForm : Form
         // 2) Taste
         pb.Section("2  Diktat-Taste");
         var key = pb.Card();
-        key.Row("Taste", Controls2.Combo(Enum.GetValues<HotkeyChoice>(), h => h.Label(), s.Hotkey, v => store.Update(x => x.Hotkey = v)),
+        key.Row("Taste", Controls2.Combo(Enum.GetValues<HotkeyChoice>().Where(h => h != HotkeyChoice.Custom || s.Hotkey == HotkeyChoice.Custom), h => h == HotkeyChoice.Custom ? "Eigene: " + s.CustomHotkeyName : h.Label(), s.Hotkey, v => store.Update(x => x.Hotkey = v)),
             "Halten = sprechen. Doppelt tippen = freihändig. + Umschalt = Command Mode.");
 
         // 3) Erkennung
@@ -80,7 +80,7 @@ sealed class OnboardingForm : Form
         // 4) Ausprobieren
         pb.Section("4  Ausprobieren");
         var tryIt = pb.Card();
-        tryIt.Full(new Label { Text = $"Klick ins Feld, halte {s.Hotkey.Label()}, sprich, lass los.", AutoSize = true, ForeColor = Theme.Secondary });
+        tryIt.Full(new Label { Text = $"Klick ins Feld, halte {s.HotkeyLabel()}, sprich, lass los.", AutoSize = true, ForeColor = Theme.Secondary });
         tryIt.Full(new TextBox { Multiline = true, Height = 90, BackColor = Theme.Window, ForeColor = Theme.Text, BorderStyle = BorderStyle.FixedSingle, Font = Theme.Body });
 
         var go = Theme.PrimaryButton("Los geht's");
