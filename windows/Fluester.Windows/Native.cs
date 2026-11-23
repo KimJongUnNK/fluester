@@ -11,6 +11,8 @@ static partial class Native
     public const int WH_KEYBOARD_LL = 13;
     public const int WM_KEYDOWN = 0x0100, WM_KEYUP = 0x0101, WM_SYSKEYDOWN = 0x0104, WM_SYSKEYUP = 0x0105;
     public const int LLKHF_INJECTED = 0x10;
+    public const int LLKHF_EXTENDED = 0x01;
+    [DllImport("user32.dll", CharSet = CharSet.Unicode)] public static extern int GetKeyNameTextW(int lParam, System.Text.StringBuilder buffer, int size);
 
     [StructLayout(LayoutKind.Sequential)]
     public struct KBDLLHOOKSTRUCT
@@ -156,6 +158,14 @@ static partial class Native
 
     public const int WS_EX_LAYERED = 0x80000, WS_EX_TRANSPARENT = 0x20, WS_EX_TOOLWINDOW = 0x80, WS_EX_TOPMOST = 0x8, WS_EX_NOACTIVATE = 0x08000000;
     public const int ULW_ALPHA = 2;
+    public const int GWL_EXSTYLE = -20;
+    public const int WM_MOUSEACTIVATE = 0x21, MA_NOACTIVATE = 3, WM_LBUTTONUP = 0x0202, WM_SETCURSOR = 0x20, WM_MOUSEMOVE = 0x0200, WM_MOUSELEAVE = 0x02A3;
+
+    [DllImport("user32.dll", EntryPoint = "GetWindowLongPtrW")]
+    public static extern IntPtr GetWindowLongPtr(IntPtr hWnd, int nIndex);
+
+    [DllImport("user32.dll", EntryPoint = "SetWindowLongPtrW")]
+    public static extern IntPtr SetWindowLongPtr(IntPtr hWnd, int nIndex, IntPtr value);
     public const byte AC_SRC_OVER = 0, AC_SRC_ALPHA = 1;
 
     [StructLayout(LayoutKind.Sequential)]

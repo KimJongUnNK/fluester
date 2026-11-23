@@ -283,3 +283,106 @@ public class ApiTests
     [Fact]
     public void BadUrl() => Assert.Throws<FluesterException>(() => new OpenAICompatibleClient("", null).Url("/x"));
 }
+
+public class CustomHotkeyAndProviderTests
+{
+    [Fact]
+    public void CustomHotkeyRoundTripsAndLabels()
+    {
+        var s = new Settings();
+        HotkeyCapture.Apply(s, HotkeyCapture.Windows(0x7C), 0x7C, "F13");
+        Assert.Equal(HotkeyChoice.Custom, s.Hotkey);
+        Assert.Equal("F13", s.HotkeyLabel());
+        var back = Settings.FromJson(s.ToJson());
+        Assert.Equal(HotkeyChoice.Custom, back.Hotkey);
+        Assert.Equal(0x7C, back.CustomHotkeyCode);
+        Assert.Equal("F13", back.CustomHotkeyName);
+        // Ohne Code (von Hand bearbeitet) → Standard-Taste statt toter Taste
+        Assert.Equal(HotkeyChoice.RightCtrl, Settings.FromJson("""{ "hotkey": "custom" }""").Hotkey);
+        Assert.Equal("Taste 183", Settings.FromJson("""{ "hotkey": "custom", "customHotkeyCode": 183, "customHotkeyName": null }""").HotkeyLabel(linux: true));
+        Assert.Equal("Strg rechts", new Settings().HotkeyLabel(linux: true));
+    }
+
+    [Fact]
+    public void CapturedKeysMapToBuiltinsOrAreRejected()
+    {
+        Assert.Equal(HotkeyChoice.RightCtrl, HotkeyCapture.Windows(0xA3).Choice);
+        Assert.Equal(HotkeyChoice.RightAlt, HotkeyCapture.Windows(0xA5).Choice);
+        Assert.Equal(HotkeyChoice.F8, HotkeyCapture.Windows(0x77).Choice);
+        Assert.True(HotkeyCapture.Windows(0x13).Ok);                    // Pause
+        Assert.True(HotkeyCapture.Windows(0xA2).Ok);                    // Strg links
+        Assert.Equal(HotkeyCapture.TypingKey, HotkeyCapture.Windows(0x41).Error);   // A
+        Assert.Equal(HotkeyCapture.TypingKey, HotkeyCapture.Windows(0x20).Error);   // Leertaste
+        Assert.Equal(HotkeyCapture.ShiftKey, HotkeyCapture.Windows(0xA0).Error);
+        Assert.False(HotkeyCapture.Windows(0x1B).Ok);                   // Esc
+        Assert.Equal(HotkeyChoice.CapsLock, HotkeyCapture.Linux(58).Choice);
+        Assert.Equal(HotkeyChoice.RightCtrl, HotkeyCapture.Linux(97).Choice);
+        Assert.True(HotkeyCapture.Linux(183).Ok);                       // F13
+        Assert.True(HotkeyCapture.Linux(29).Ok);                        // Strg links
+        Assert.Equal(HotkeyCapture.TypingKey, HotkeyCapture.Linux(30).Error);       // A
+        Assert.Equal(HotkeyCapture.ShiftKey, HotkeyCapture.Linux(54).Error);
+        Assert.False(HotkeyCapture.Linux(1).Ok);
+        // Abgelehnt → Einstellungen bleiben
+        var s = new Settings { Hotkey = HotkeyChoice.F8 };
+        HotkeyCapture.Apply(s, HotkeyCapture.Linux(30), 30, "a");
+        Assert.Equal(HotkeyChoice.F8, s.Hotkey);
+        Assert.Equal("Strg links", HotkeyCapture.LinuxKeyName("Control_L", 29));
+        Assert.Equal("F13", HotkeyCapture.LinuxKeyName("F13", 183));
+        Assert.Equal("Ziffernblock 0", HotkeyCapture.LinuxKeyName("KP_0", 82));
+        Assert.Equal("Taste 5", HotkeyCapture.LinuxKeyName(null, 5));
+    }
+
+    [Fact]
+    public void ProvidersHaveUsableDefaults()
+    {
+        Assert.Equal(ProviderPreset.All.Length, ProviderPreset.All.Select(p => p.Id).Distinct().Count());
+        foreach (var p in ProviderPreset.All.Where(p => p.Id != "custom"))
+        {
+            Assert.True(Uri.TryCreate(p.BaseUrl, UriKind.Absolute, out _), p.Id);
+            Assert.False(string.IsNullOrEmpty(p.ChatModel), p.Id);
+            Assert.Contains(p.ChatModel, p.Suggestions(false));
+            if (p.Transcription) Assert.Contains(p.TranscriptionModel, p.Suggestions(true));
+            if (p.NeedsKey) Assert.StartsWith("https://", p.KeyUrl);
+        }
+        var speech = ProviderPreset.For(transcription: true).Select(p => p.Id).ToArray();
+        Assert.Equal(new[] { "groq", "openai", "custom" }, speech);
+        Assert.Contains(ProviderPreset.Anthropic, ProviderPreset.For(false));
+        Assert.Equal("claude-haiku-5-5", ProviderPreset.ById("anthropic").ChatModel);
+        // Eigenes Modell steht vorn in der Liste
+        Assert.Equal("mein-modell", ProviderPreset.Mistral.Suggestions(false, "mein-modell")[0]);
+        Assert.Same(ProviderPreset.Groq, ProviderPreset.ById("gibts-nicht"));
+    }
+
+    [Fact]
+    public async Task ClaudeGetsItsHeadersAndNoTemperature()
+    {
+        var c = new OpenAICompatibleClient(ProviderPreset.Anthropic.BaseUrl, "sk-ant-x");
+        Assert.True(c.IsAnthropic);
+        var r = c.ChatRequest("claude-haiku-5-5", "sys", "hallo");
+        Assert.Equal("https://api.anthropic.com/v1/chat/completions", r.RequestUri!.ToString());
+        Assert.Equal("Bearer sk-ant-x", r.Headers.Authorization!.ToString());
+        Assert.Equal("sk-ant-x", r.Headers.GetValues("x-api-key").Single());
+        Assert.Equal("2023-06-01", r.Headers.GetValues("anthropic-version").Single());
+        var body = await r.Content!.ReadAsStringAsync();
+        Assert.DoesNotContain("temperature", body);
+        Assert.Contains("\"max_tokens\":8192", body);
+        // Andere Anbieter: Temperatur ja, keine Anthropic-Kopfzeilen
+        var g = new OpenAICompatibleClient(ProviderPreset.Groq.BaseUrl, "k").ChatRequest("llama-3.3-70b-versatile", "s", "u");
+        Assert.Contains("\"temperature\":0.2", await g.Content!.ReadAsStringAsync());
+        Assert.False(g.Headers.Contains("x-api-key"));
+        Assert.False(OpenAICompatibleClient.AcceptsTemperature("openai/gpt-5-mini"));
+        Assert.False(OpenAICompatibleClient.AcceptsTemperature("o4-mini"));
+        Assert.True(OpenAICompatibleClient.AcceptsTemperature("gemini-2.5-flash"));
+        Assert.Equal("https://openrouter.ai/api/v1/models", new OpenAICompatibleClient(ProviderPreset.OpenRouter.BaseUrl, null).Url("/models").ToString());
+    }
+
+    [Fact]
+    public void ModelListsAreParsed()
+    {
+        Assert.Equal(new[] { "gpt-4o-mini", "whisper-1" },
+            OpenAICompatibleClient.ParseModels("""{"object":"list","data":[{"id":"whisper-1"},{"id":"gpt-4o-mini"},{"id":"whisper-1"},{"id":null},{}]}"""));
+        Assert.Equal(new[] { "gemini-2.5-flash" }, OpenAICompatibleClient.ParseModels("""{"data":[{"id":"models/gemini-2.5-flash"}]}"""));
+        Assert.Equal(new[] { "qwen2.5:7b" }, OpenAICompatibleClient.ParseModels("""{"models":[{"name":"qwen2.5:7b"}]}"""));
+        Assert.Throws<FluesterException>(() => OpenAICompatibleClient.ParseModels("<html>"));
+    }
+}

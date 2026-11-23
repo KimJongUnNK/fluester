@@ -181,15 +181,19 @@ sealed class HotkeyTracker
 
     public HotkeyChoice Choice { get { lock (gate) return choice; } }
     HotkeyChoice choice = HotkeyChoice.RightCtrl;
+    ushort customCode;
     bool hotkeyDown, ctrlDown, metaDown, shiftDown;
 
-    /// <summary>Andere Taste: Zustand zurücksetzen. Gleiche Taste: nichts tun – eine gerade gehaltene Taste bleibt gehalten.</summary>
-    public void SetChoice(HotkeyChoice c)
+    /// <summary>Andere Taste: Zustand zurücksetzen. Gleiche Taste: nichts tun – eine gerade gehaltene Taste bleibt gehalten.
+    /// <paramref name="custom"/>: evdev-Code der eigenen Taste (<see cref="HotkeyChoice.Custom"/>).</summary>
+    public void SetChoice(HotkeyChoice c, int custom = 0)
     {
+        var code = (ushort)Math.Clamp(custom, 0, ushort.MaxValue);
         lock (gate)
         {
-            if (c == choice) return;
+            if (c == choice && code == customCode) return;
             choice = c;
+            customCode = code;
             hotkeyDown = ctrlDown = metaDown = shiftDown = false;
         }
     }
@@ -217,7 +221,7 @@ sealed class HotkeyTracker
             else if (hotkeyDown && (!ctrlDown || !metaDown)) { hotkeyDown = false; Released?.Invoke(); }
             return;
         }
-        if (code == HotkeyCode)
+        if (code == HotkeyCode && code != 0)
         {
             if (down && !hotkeyDown) { hotkeyDown = true; Pressed?.Invoke(shiftDown); }
             else if (!down && hotkeyDown) { hotkeyDown = false; Released?.Invoke(); }
@@ -233,6 +237,7 @@ sealed class HotkeyTracker
         HotkeyChoice.CapsLock => Keys.CAPSLOCK,
         HotkeyChoice.RightAlt => Keys.RIGHTALT,
         HotkeyChoice.F8 => Keys.F8,
+        HotkeyChoice.Custom => customCode,
         _ => 0,
     };
 

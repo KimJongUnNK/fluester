@@ -83,6 +83,16 @@ public sealed class DictationService(ISecretStore secrets)
         return await new OpenAICompatibleClient(cfg.BaseUrl, key, timeout).ChatAsync(cfg.Model, system, user, ct);
     }
 
+    /// <summary>Modelle eines Anbieters abrufen (Einstellungen › „Modelle laden“). Für die Erkennung nur Sprach-Modelle, wenn erkennbar.</summary>
+    public static async Task<string[]> ListModelsAsync(ApiConfig cfg, string? key, bool transcription, CancellationToken ct = default)
+    {
+        var all = await new OpenAICompatibleClient(cfg.BaseUrl, key, TimeSpan.FromSeconds(20)).ListModelsAsync(ct);
+        if (!transcription) return all;
+        var speech = all.Where(m => m.Contains("whisper", StringComparison.OrdinalIgnoreCase) || m.Contains("transcribe", StringComparison.OrdinalIgnoreCase)
+            || m.Contains("voxtral", StringComparison.OrdinalIgnoreCase)).ToArray();
+        return speech.Length > 0 ? speech : all;
+    }
+
     /// <summary>Verbindung zu einem Anbieter prüfen (Einstellungen).</summary>
     public static async Task<string> TestConnectionAsync(ApiConfig cfg, string? key, bool transcription, CancellationToken ct = default)
     {

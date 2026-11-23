@@ -64,7 +64,17 @@ try {
 
     Step 'Entpacke ...'
     $out = Join-Path $tmp 'out'
-    Expand-Archive -Path $zip -DestinationPath $out -Force
+    # .NET-ZipFile direkt (Expand-Archive scheitert je nach Modulversion), sonst tar.exe von Windows
+    try {
+        Add-Type -AssemblyName System.IO.Compression.FileSystem
+        if (Test-Path $out) { Remove-Item $out -Recurse -Force }
+        [System.IO.Compression.ZipFile]::ExtractToDirectory($zip, $out)
+    } catch {
+        if (Test-Path $out) { Remove-Item $out -Recurse -Force }
+        New-Item -ItemType Directory -Path $out -Force | Out-Null
+        & "$env:SystemRoot\System32\tar.exe" -xf $zip -C $out
+        if ($LASTEXITCODE -ne 0) { Fail 'Entpacken fehlgeschlagen. Bitte spaeter erneut versuchen.' }
+    }
     if (-not (Test-Path (Join-Path $out 'Fluester.exe'))) { Fail 'Im Archiv fehlt Fluester.exe. Bitte spaeter erneut versuchen.' }
 
     $update = Test-Path $Exe

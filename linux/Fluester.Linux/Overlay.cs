@@ -7,15 +7,37 @@ namespace Fluester.Linux;
 /// <summary>Die Flow-Leiste unter Linux – wie auf Mac und Windows: schwarze Pille unten in der Bildschirmmitte mit
 /// Live-Wellenform, „Schreibt …“, „✓ 12 Wörter“ oder Fehler.
 /// Technisch ein X11-Fenster ohne Fensterverwaltung (override-redirect, wie Tooltips und Menüs): liegt immer oben,
-/// nimmt nie den Fokus (der Text landet weiter im richtigen Fenster), Klicks gehen durch. Läuft unter X11 und unter
+/// nimmt nie den Fokus (der Text landet weiter im richtigen Fenster). Klicks gehen durch – außer auf „Stopp“ und
+/// „Abbrechen“, die beim Zuhören bzw. Schreiben auf der Leiste sitzen (falls die Taste mal nicht reagiert). Läuft unter X11 und unter
 /// Wayland über Xwayland (GNOME, KDE, Sway, Hyprland). Gezeichnet mit cairo, mit Transparenz.
 /// Alle X11-Aufrufe laufen auf einem eigenen Thread; die öffentlichen Methoden sind von überall aufrufbar.</summary>
 sealed class Overlay : IDisposable
 {
     public enum Phase { Hidden, Idle, Listening, Processing, Done, Error }
 
-    /// <summary>Breite beim Zuhören: Punkt, 30 Pegelbalken und die Dauer haben Platz.</summary>
-    const int ListeningWidth = 266;
+    /// <summary>Breite beim Zuhören: Punkt, 30 Pegelbalken, Dauer und die Knöpfe ■ ✕ haben Platz.</summary>
+    const int ListeningWidth = 330;
+    /// <summary>Platz für den ✕-Knopf beim Schreiben.</summary>
+    const int CancelSpace = 36;
+
+    /// <summary>■ geklickt: Aufnahme beenden und Text einfügen. Kommt auf dem Thread der Leiste.</summary>
+    public event Action? StopClicked;
+    /// <summary>✕ geklickt: Aufnahme bzw. Verarbeitung verwerfen. Kommt auf dem Thread der Leiste.</summary>
+    public event Action? CancelClicked;
+
+    /// <summary>Lage der Knöpfe in der Leiste (x, y, Durchmesser); Durchmesser 0 = kein Knopf.</summary>
+    internal static ((double X, double Y, double D) Stop, (double X, double Y, double D) Cancel) Buttons(Phase p, int w, int h, double s)
+    {
+        double d = 26 * s, y = (h - d) / 2;
+        var cancel = p is Phase.Listening or Phase.Processing ? (w - d - 8 * s, y, d) : (0, 0, 0);
+        var stop = p == Phase.Listening ? (cancel.Item1 - d - 6 * s, y, d) : (0, 0, 0);
+        return (stop, cancel);
+    }
+    (double X, double Y, double D) stopBtn, cancelBtn;
+    /// <summary>Aktuelle Lage der Knöpfe in der Leiste (Selbsttest).</summary>
+    internal (double X, double Y, double D) StopButton => stopBtn;
+    internal (double X, double Y, double D) CancelButton => cancelBtn;
+    string inputShape = "";
 
     // Gewünschter Zustand – von beliebigen Threads gesetzt, vom UI-Thread gezeichnet
     readonly object gate = new();
@@ -187,13 +209,43 @@ sealed class Overlay : IDisposable
         X.XStoreName(dpy, win, "Flüster");
         // Als Benachrichtigung kennzeichnen (Compositoren legen sie nach oben, ohne Schatten/Animation eines Fensters)
         SetAtomProperty("_NET_WM_WINDOW_TYPE", "_NET_WM_WINDOW_TYPE_NOTIFICATION");
-        // Klicks gehen durch die Leiste hindurch
-        try { X.XShapeCombineRectangles(dpy, win, 2 /* ShapeInput */, 0, 0, IntPtr.Zero, 0, 0 /* ShapeSet */, 0); }
-        catch (Exception e) when (e is DllNotFoundException or EntryPointNotFoundException) { }
+        // Klicks gehen durch die Leiste hindurch – bis auf die Knöpfe (SetInputShape)
+        SetInputShape(Array.Empty<short>());
+        X.XSelectInput(dpy, win, (1 << 2) | (1 << 3)); // ButtonPressMask | ButtonReleaseMask
         surface = Cairo.cairo_xlib_surface_create(dpy, win, visual, 10, 10);
         X.XFlush(dpy);
         var (mx, my, mw, mh, name) = PrimaryMonitor();
         Where = $"{name} {mw}×{mh}{(Composited ? "" : ", ohne Compositor")}{(scale != 1 ? $", Skalierung {scale:0.##}" : "")}";
+    }
+
+    /// <summary>Wo die Leiste Klicks annimmt (Rechtecke x, y, b, h); leer = überall durchlassen.</summary>
+    void SetInputShape(short[] rects)
+    {
+        var key = string.Join(",", rects);
+        if (key == inputShape && win != 0 && inputShape.Length > 0) return;
+        inputShape = key;
+        try { X.XShapeCombineRectangles(dpy, win, 2 /* ShapeInput */, 0, 0, rects, rects.Length / 4, 0 /* ShapeSet */, 0); }
+        catch (Exception e) when (e is DllNotFoundException or EntryPointNotFoundException) { }
+    }
+
+    /// <summary>Klicks auf ■/✕ abholen (läuft bei jedem Bild, solange die Knöpfe zu sehen sind).</summary>
+    void PollClicks()
+    {
+        var ev = new byte[192];
+        while (X.XPending(dpy) > 0)
+        {
+            X.XNextEvent(dpy, ev);
+            if (BitConverter.ToInt32(ev, 0) != 5 /* ButtonRelease */ || BitConverter.ToUInt32(ev, 84) != 1 /* links */) continue;
+            int x = BitConverter.ToInt32(ev, 64), y = BitConverter.ToInt32(ev, 68);
+            static bool Hit((double X, double Y, double D) b, int x, int y) =>
+                b.D > 0 && x >= b.X && x <= b.X + b.D && y >= b.Y && y <= b.Y + b.D;
+            try
+            {
+                if (Hit(stopBtn, x, y)) StopClicked?.Invoke();
+                else if (Hit(cancelBtn, x, y)) CancelClicked?.Invoke();
+            }
+            catch (Exception e) { Log.Write("Flow-Leiste, Klick: " + e.Message); }
+        }
     }
 
     void SetAtomProperty(string property, string value)
@@ -296,9 +348,16 @@ sealed class Overlay : IDisposable
         {
             Phase.Idle => (int)(56 * s),
             Phase.Listening => (int)(ListeningWidth * s),
+            Phase.Processing => (int)Math.Min(560 * s, 58 * s + TextWidth(msg, font, fontSize) + CancelSpace * s),
             _ => (int)Math.Min(560 * s, 58 * s + TextWidth(msg, font, fontSize)),
         };
         if (p == Phase.Idle) h = (int)(10 * s);
+        (stopBtn, cancelBtn) = Buttons(p, w, h, s);
+        var rects = new List<short>();
+        foreach (var b in new[] { stopBtn, cancelBtn })
+            if (b.D > 0) rects.AddRange(new[] { (short)b.X, (short)b.Y, (short)Math.Ceiling(b.D), (short)Math.Ceiling(b.D) });
+        SetInputShape(rects.ToArray());
+        PollClicks();
         var (mx, my, mw, mh, _) = PrimaryMonitor();
         int x = mx + (mw - w) / 2, y = my + mh - h - (int)(28 * s);
         if (Bounds != (x, y, w, h))
@@ -359,7 +418,9 @@ sealed class Overlay : IDisposable
                 // Dauer oder „frei“ (freihändig)
                 string label = hf && since < 3 ? "frei" : $"{(int)since / 60}:{(int)since % 60:00}";
                 double lw = TextWidth(cr, label);
-                Text(cr, label, w - lw - 13 * s, cy, 1, 1, 1, 0.66);
+                var (stop, _) = Buttons(p, w, h, s);
+                Text(cr, label, stop.X - lw - 8 * s, cy, 1, 1, 1, 0.66);
+                DrawButtons(cr, p, w, h, s);
                 break;
             }
             case Phase.Processing:
@@ -372,6 +433,7 @@ sealed class Overlay : IDisposable
                     Cairo.cairo_fill(cr);
                 }
                 Text(cr, msg, left + 32 * s, cy, 1, 1, 1, 1);
+                DrawButtons(cr, p, w, h, s);
                 break;
             }
             case Phase.Done:
@@ -405,6 +467,43 @@ sealed class Overlay : IDisposable
         Cairo.cairo_pop_group_to_source(cr);
         Cairo.cairo_set_operator(cr, Cairo.OPERATOR_SOURCE);
         Cairo.cairo_paint(cr);
+    }
+
+    /// <summary>■ (Stopp) und ✕ (Abbrechen) als runde Knöpfe.</summary>
+    static void DrawButtons(IntPtr cr, Phase p, int w, int h, double s)
+    {
+        var (stop, cancel) = Buttons(p, w, h, s);
+        if (stop.D > 0)
+        {
+            Cairo.cairo_set_source_rgba(cr, 1, 1, 1, 0.18);
+            Cairo.cairo_arc(cr, stop.X + stop.D / 2, stop.Y + stop.D / 2, stop.D / 2, 0, 2 * Math.PI);
+            Cairo.cairo_fill(cr);
+            double q = 9 * s;
+            Cairo.cairo_set_source_rgba(cr, 1, 1, 1, 1);
+            Cairo.cairo_new_path(cr);
+            double r = 2 * s, x0 = stop.X + (stop.D - q) / 2, y0 = stop.Y + (stop.D - q) / 2;
+            Cairo.cairo_arc(cr, x0 + q - r, y0 + r, r, -Math.PI / 2, 0);
+            Cairo.cairo_arc(cr, x0 + q - r, y0 + q - r, r, 0, Math.PI / 2);
+            Cairo.cairo_arc(cr, x0 + r, y0 + q - r, r, Math.PI / 2, Math.PI);
+            Cairo.cairo_arc(cr, x0 + r, y0 + r, r, Math.PI, 3 * Math.PI / 2);
+            Cairo.cairo_close_path(cr);
+            Cairo.cairo_fill(cr);
+        }
+        if (cancel.D > 0)
+        {
+            double cx = cancel.X + cancel.D / 2, cyy = cancel.Y + cancel.D / 2, a = 4.2 * s;
+            Cairo.cairo_set_source_rgba(cr, 1, 1, 1, 0.18);
+            Cairo.cairo_arc(cr, cx, cyy, cancel.D / 2, 0, 2 * Math.PI);
+            Cairo.cairo_fill(cr);
+            Cairo.cairo_set_source_rgba(cr, 1, 1, 1, 0.92);
+            Cairo.cairo_set_line_width(cr, 2 * s);
+            Cairo.cairo_set_line_cap(cr, 1 /* round */);
+            Cairo.cairo_move_to(cr, cx - a, cyy - a);
+            Cairo.cairo_line_to(cr, cx + a, cyy + a);
+            Cairo.cairo_move_to(cr, cx - a, cyy + a);
+            Cairo.cairo_line_to(cr, cx + a, cyy - a);
+            Cairo.cairo_stroke(cr);
+        }
     }
 
     /// <summary>Abgerundetes Rechteck mit Radius = halbe kurze Seite – waagrecht die Leiste, senkrecht die Pegelbalken.</summary>
@@ -467,7 +566,13 @@ sealed class Overlay : IDisposable
         const string font = "Sans";
         double s = 1, fontSize = 13;
         int h = p == Phase.Idle ? 10 : 40;
-        int w = p switch { Phase.Idle => 56, Phase.Listening => ListeningWidth, _ => (int)Math.Min(560, 58 + TextWidth(msg, font, fontSize)) };
+        int w = p switch
+        {
+            Phase.Idle => 56,
+            Phase.Listening => ListeningWidth,
+            Phase.Processing => (int)Math.Min(560, 58 + TextWidth(msg, font, fontSize) + CancelSpace),
+            _ => (int)Math.Min(560, 58 + TextWidth(msg, font, fontSize)),
+        };
         var lv = Enumerable.Range(0, 30).Select(i => (float)(0.25 + 0.6 * Math.Abs(Math.Sin(i * 0.55)))).ToArray();
         var img = Cairo.cairo_image_surface_create(0 /* ARGB32 */, w, h);
         var cr = Cairo.cairo_create(img);
@@ -574,7 +679,10 @@ sealed class Overlay : IDisposable
         [DllImport(Lib)] public static extern int XGetWindowAttributes(IntPtr dpy, ulong w, out XWindowAttributes attrs);
         [DllImport(Lib)] public static extern bool XTranslateCoordinates(IntPtr dpy, ulong src, ulong dest, int x, int y, out int destX, out int destY, out ulong child);
 
-        [DllImport("libXext.so.6")] public static extern void XShapeCombineRectangles(IntPtr dpy, ulong w, int kind, int x, int y, IntPtr rects, int n, int op, int ordering);
+        [DllImport("libXext.so.6")] public static extern void XShapeCombineRectangles(IntPtr dpy, ulong w, int kind, int x, int y, short[] rects, int n, int op, int ordering);
+        [DllImport(Lib)] public static extern int XSelectInput(IntPtr dpy, ulong w, long mask);
+        [DllImport(Lib)] public static extern int XPending(IntPtr dpy);
+        [DllImport(Lib)] public static extern int XNextEvent(IntPtr dpy, byte[] ev);
         [DllImport("libXrandr.so.2")] public static extern IntPtr XRRGetMonitors(IntPtr dpy, ulong window, bool active, out int n);
         [DllImport("libXrandr.so.2")] public static extern void XRRFreeMonitors(IntPtr monitors);
     }

@@ -90,6 +90,17 @@ static class SelfTest
 
     static void Input(bool required)
     {
+        // Eigene Taste (F13 = evdev 183): erkannt, Strg rechts dann nicht mehr
+        {
+            var t = new HotkeyTracker();
+            t.SetChoice(HotkeyChoice.Custom, 183);
+            int downs = 0, ups = 0;
+            t.Pressed += _ => downs++;
+            t.Released += () => ups++;
+            t.Feed(Keys.RIGHTCTRL, 1); t.Feed(Keys.RIGHTCTRL, 0);
+            t.Feed(183, 1); t.Feed(183, 2); t.Feed(183, 0);
+            Check(downs == 1 && ups == 1, "eigene Taste (F13) erkannt, Strg rechts ignoriert", required: true);
+        }
         Log("Diktat-Taste (virtuelle Tastatur → /dev/input → Taste erkannt):");
         Log("  Gruppe „input“: " + (Libc.geteuid() == 0 ? "nicht nötig (root)" : InputAccess.Active ? "aktiv"
             : InputAccess.Registered ? "eingetragen, aktiv nach dem nächsten Anmelden (bis dahin: fluester stop; fluester start)" : "fehlt – fluester setup"));
@@ -180,6 +191,28 @@ static class SelfTest
         var st = bar.WindowState();
         Check(st is { Viewable: true }, $"Fenster sichtbar auf {bar.Where}{(st is { } a ? $" · {a.W}×{a.H} bei {a.X},{a.Y}" : "")}", required);
         Check(st is { OverrideRedirect: true }, "ohne Fensterverwaltung (nimmt nie den Fokus)", required);
+        if (st is { } at && Desktop.X11 && Desktop.Which("xdotool") is { } xdotool)
+        {
+            // Echte Mausklicks auf ■ und ✕ (wie ein Nutzer, über den X-Server)
+            int stops = 0, cancels = 0;
+            bar.StopClicked += () => stops++;
+            bar.CancelClicked += () => cancels++;
+            void Click((double X, double Y, double D) b)
+            {
+                var x = (int)(at.X + b.X + b.D / 2);
+                var y = (int)(at.Y + b.Y + b.D / 2);
+                Desktop.Run(xdotool, new[] { "mousemove", x.ToString(), y.ToString(), "click", "1" });
+                Thread.Sleep(300);
+            }
+            Click(bar.StopButton);
+            Check(stops == 1 && cancels == 0, "■ auf der Leiste per Maus geklickt → Stopp", required);
+            bar.Processing(false);
+            Thread.Sleep(300);
+            var p = bar.WindowState();
+            if (p is { } pa) at = pa;
+            Click(bar.CancelButton);
+            Check(cancels == 1, "✕ beim Schreiben geklickt → Abbruch", required);
+        }
         bar.Done("12 Wörter");
         Thread.Sleep(200);
         bar.Idle();

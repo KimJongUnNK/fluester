@@ -15,6 +15,13 @@ final class FlowBarModel: ObservableObject {
     @Published var phase: Phase = .idle
     @Published var levels: [Float] = Array(repeating: 0, count: 30)
     @Published var seconds: Int = 0
+    /// Name der Diktat-Taste für die Hinweise („Fn“, „⌥ rechts“, eigene Taste …)
+    @Published var keyName = "Fn"
+
+    /// ■ auf der Leiste: Aufnahme beenden und Text einfügen.
+    var onStop: (() -> Void)?
+    /// ✕ auf der Leiste: Aufnahme bzw. Verarbeitung verwerfen.
+    var onCancel: (() -> Void)?
 
     func push(_ level: Float) {
         var l = levels
@@ -35,6 +42,7 @@ struct FlowBarView: View {
         HStack(spacing: 10) {
             icon
             content
+            buttons
         }
         .padding(.horizontal, 14)
         .frame(height: 38)
@@ -70,10 +78,25 @@ struct FlowBarView: View {
         }
     }
 
+    /// Stopp und Abbrechen zum Anklicken – falls die Taste mal nicht reagiert.
+    @ViewBuilder private var buttons: some View {
+        switch model.phase {
+        case .listening:
+            HStack(spacing: 6) {
+                BarButton(symbol: "stop.fill", help: "Stopp – Text einfügen") { model.onStop?() }
+                BarButton(symbol: "xmark", help: "Abbrechen") { model.onCancel?() }
+            }
+        case .processing:
+            BarButton(symbol: "xmark", help: "Abbrechen") { model.onCancel?() }
+        default:
+            EmptyView()
+        }
+    }
+
     @ViewBuilder private var content: some View {
         switch model.phase {
         case .idle:
-            Text("Fn halten zum Diktieren").foregroundStyle(.white.opacity(0.7))
+            Text("\(model.keyName) halten zum Diktieren").foregroundStyle(.white.opacity(0.7))
         case .listening(let handsFree, let command):
             HStack(spacing: 8) {
                 Waveform(levels: model.levels, tint: command ? Color(red: 0.75, green: 0.55, blue: 1) : .white)
@@ -93,8 +116,30 @@ struct FlowBarView: View {
     private func label(handsFree: Bool, command: Bool) -> String {
         let t = String(format: "%d:%02d", model.seconds / 60, model.seconds % 60)
         if command { return "Befehl · \(t)" }
-        if handsFree { return "Freihändig · \(t) · Fn beendet" }
+        if handsFree { return "Freihändig · \(t) · \(model.keyName) beendet" }
         return t
+    }
+}
+
+/// Runder Knopf auf der Leiste (■ / ✕), unter der Maus heller.
+struct BarButton: View {
+    let symbol: String
+    let help: String
+    let action: () -> Void
+    @State private var hover = false
+
+    var body: some View {
+        Button(action: action) {
+            Image(systemName: symbol)
+                .font(.system(size: 10, weight: .bold))
+                .foregroundStyle(.white)
+                .frame(width: 24, height: 24)
+                .background(Circle().fill(Color.white.opacity(hover ? 0.32 : 0.16)))
+                .contentShape(Circle())
+        }
+        .buttonStyle(.plain)
+        .help(help)
+        .onHover { hover = $0 }
     }
 }
 
@@ -116,7 +161,13 @@ struct Waveform: View {
     }
 }
 
-/// Fenster für die Leiste: schwebt über allem, nimmt keinen Fokus, ignoriert Klicks.
+/// Nimmt den ersten Klick an, ohne dass das Fenster vorher aktiv sein muss (die Leiste wird nie aktiv).
+final class FirstClickHostingView<Content: View>: NSHostingView<Content> {
+    override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
+}
+
+/// Fenster für die Leiste: schwebt über allem und nimmt nie den Fokus (sonst landet der Text nicht in der App).
+/// Klicks nimmt es nur an, solange ■/✕ zu sehen sind.
 @MainActor
 final class FlowBarController {
     let model = FlowBarModel()
@@ -136,21 +187,30 @@ final class FlowBarController {
         panel.ignoresMouseEvents = true
         panel.hidesOnDeactivate = false
         panel.isReleasedWhenClosed = false
-        let host = NSHostingView(rootView: FlowBarView(model: model))
+        panel.becomesKeyOnlyIfNeeded = true
+        let host = FirstClickHostingView(rootView: FlowBarView(model: model))
         host.frame = NSRect(x: 0, y: 0, width: 520, height: 64)
         panel.contentView = host
     }
 
     func set(_ phase: FlowBarModel.Phase, autoHide: Double? = nil) {
         hideWork?.cancel()
+        let wasListening: Bool
+        if case .listening = model.phase { wasListening = true } else { wasListening = false }
         model.phase = phase
-        if case .listening = phase { model.resetLevels() }
+        // Pegel nur bei einer neuen Aufnahme leeren, nicht beim Wechsel auf freihändig oder Command Mode
+        if case .listening = phase, !wasListening { model.resetLevels() }
+        switch phase {
+        case .listening, .processing: panel.ignoresMouseEvents = false
+        default: panel.ignoresMouseEvents = true
+        }
         show()
         if let delay = autoHide {
             let work = DispatchWorkItem { [weak self] in
                 MainActor.assumeIsolated {
                     guard let self = self else { return }
                     self.model.phase = .idle
+                    self.panel.ignoresMouseEvents = true
                     if !self.showWhenIdle { self.hide() }
                 }
             }
@@ -162,6 +222,7 @@ final class FlowBarController {
     func idle() {
         hideWork?.cancel()
         model.phase = .idle
+        panel.ignoresMouseEvents = true
         if showWhenIdle { show() } else { hide() }
     }
 

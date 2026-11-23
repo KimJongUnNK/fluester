@@ -35,7 +35,9 @@ struct OnboardingView: View {
                 step(2, "Diktat-Taste") {
                     VStack(alignment: .leading, spacing: 8) {
                         Picker("Taste", selection: $store.s.hotkey) {
-                            ForEach(HotkeyChoice.allCases) { Text($0.label).tag($0) }
+                            ForEach(HotkeyChoice.allCases.filter { $0 != .custom || store.s.hotkey == .custom }) { h in
+                                Text(h == .custom ? store.s.hotkeyLabel : h.label).tag(h)
+                            }
                         }
                         .pickerStyle(.segmented)
                         .labelsHidden()
@@ -58,7 +60,7 @@ struct OnboardingView: View {
                 }
                 step(4, "Ausprobieren") {
                     VStack(alignment: .leading, spacing: 6) {
-                        Text("Klick ins Feld, halte \(store.s.hotkey.label), sprich, lass los. Doppeltipp = freihändig.")
+                        Text("Klick ins Feld, halte \(store.s.hotkeyLabel), sprich, lass los. Doppeltipp = freihändig.")
                             .font(.callout).foregroundStyle(.secondary)
                         TextEditor(text: $tryText)
                             .font(.body)

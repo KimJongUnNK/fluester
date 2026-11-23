@@ -10,10 +10,19 @@ namespace Fluester.Windows;
 enum BarPhase { Hidden, Idle, Listening, Processing, Done, Error }
 
 /// <summary>Die „Flow-Leiste“: schwarze Pille unten in der Bildschirmmitte mit Live-Wellenform.
-/// Layered Window mit Alpha pro Pixel – weiche Kanten, kein Fokus, Klicks gehen durch.</summary>
+/// Layered Window mit Alpha pro Pixel – weiche Kanten, nie Fokus. Beim Zuhören und Schreiben trägt sie
+/// „Stopp“ und „Abbrechen“ zum Anklicken (falls die Taste mal nicht reagiert), sonst gehen Klicks durch.</summary>
 sealed class FlowBar : System.Windows.Forms.Form
 {
+    /// <summary>■ geklickt: Aufnahme beenden und Text einfügen.</summary>
+    public event Action? StopClicked;
+    /// <summary>✕ geklickt: Aufnahme bzw. Verarbeitung verwerfen.</summary>
+    public event Action? CancelClicked;
+
     BarPhase phase = BarPhase.Hidden;
+    RectangleF stopRect, cancelRect;
+    int hover;   // 0 = nichts, 1 = Stopp, 2 = Abbrechen
+    bool clickable;
     string message = "";
     bool handsFree, command;
     readonly float[] levels = new float[30];
@@ -33,6 +42,48 @@ sealed class FlowBar : System.Windows.Forms.Form
     }
 
     protected override bool ShowWithoutActivation => true;
+
+    /// <summary>Klickbar nur, solange es Knöpfe gibt – sonst gehen Klicks durch zur App darunter.</summary>
+    void SetClickable(bool on)
+    {
+        if (!IsHandleCreated || on == clickable) return;
+        clickable = on;
+        long ex = GetWindowLongPtr(Handle, GWL_EXSTYLE).ToInt64();
+        ex = on ? ex & ~WS_EX_TRANSPARENT : ex | WS_EX_TRANSPARENT;
+        SetWindowLongPtr(Handle, GWL_EXSTYLE, new IntPtr(ex));
+    }
+
+    protected override void WndProc(ref System.Windows.Forms.Message m)
+    {
+        switch (m.Msg)
+        {
+            case WM_MOUSEACTIVATE:
+                // Klick darf den Fokus nicht aus der App nehmen, in die gleich eingefügt wird
+                m.Result = (IntPtr)MA_NOACTIVATE;
+                return;
+            case WM_MOUSEMOVE:
+            {
+                var p = ClientPoint(m.LParam);
+                bool over = stopRect.Contains(p) || cancelRect.Contains(p);
+                System.Windows.Forms.Cursor.Current = over ? System.Windows.Forms.Cursors.Hand : System.Windows.Forms.Cursors.Default;
+                break;
+            }
+            case WM_LBUTTONUP:
+            {
+                var p = ClientPoint(m.LParam);
+                if (stopRect.Contains(p)) StopClicked?.Invoke();
+                else if (cancelRect.Contains(p)) CancelClicked?.Invoke();
+                return;
+            }
+        }
+        base.WndProc(ref m);
+    }
+
+    static PointF ClientPoint(IntPtr lParam)
+    {
+        long v = lParam.ToInt64();
+        return new PointF((short)(v & 0xFFFF), (short)((v >> 16) & 0xFFFF));
+    }
 
     protected override System.Windows.Forms.CreateParams CreateParams
     {
@@ -92,6 +143,7 @@ sealed class FlowBar : System.Windows.Forms.Form
         }
         if (!IsHandleCreated) CreateHandle();
         Render();
+        SetClickable(p is BarPhase.Listening or BarPhase.Processing);
         if (!Visible) Show();
         if (p is BarPhase.Listening or BarPhase.Processing) anim.Start(); else anim.Stop();
     }
@@ -107,15 +159,25 @@ sealed class FlowBar : System.Windows.Forms.Form
         int w = phase switch
         {
             BarPhase.Idle => (int)(56 * s),
-            BarPhase.Listening => (int)(236 * s),
+            BarPhase.Listening => (int)(300 * s),
+            BarPhase.Processing => Math.Min((int)(560 * s), (int)(56 * s + MeasureText(message, font) + 36 * s)),
             _ => Math.Min((int)(560 * s), (int)(56 * s + MeasureText(message, font))),
         };
         int idleH = (int)(10 * s);
         if (phase == BarPhase.Idle) h = idleH;
 
+        // Knöpfe rechts: beim Zuhören ■ und ✕, beim Schreiben nur ✕
+        float bd = 26 * s, by = (h - bd) / 2f;
+        cancelRect = phase is BarPhase.Listening or BarPhase.Processing ? new RectangleF(w - bd - 8 * s, by, bd, bd) : RectangleF.Empty;
+        stopRect = phase == BarPhase.Listening ? new RectangleF(cancelRect.X - bd - 6 * s, by, bd, bd) : RectangleF.Empty;
+
         var area = System.Windows.Forms.Screen.FromPoint(System.Windows.Forms.Cursor.Position).WorkingArea;
         int x = area.Left + (area.Width - w) / 2;
         int y = area.Bottom - h - (int)(22 * s);
+        // Hervorhebung aus der Mausposition – so verschwindet sie auch, wenn die Maus die Leiste verlässt
+        var mouse = System.Windows.Forms.Cursor.Position;
+        var local = new PointF(mouse.X - x, mouse.Y - y);
+        hover = stopRect.Contains(local) ? 1 : cancelRect.Contains(local) ? 2 : 0;
 
         using var bmp = new Bitmap(w, h, PixelFormat.Format32bppArgb);
         using (var g = Graphics.FromImage(bmp))
@@ -159,7 +221,8 @@ sealed class FlowBar : System.Windows.Forms.Form
                 string label = handsFree ? (secs >= 3 ? $"{(int)secs / 60}:{(int)secs % 60:00}" : "frei") : $"{(int)secs / 60}:{(int)secs % 60:00}";
                 using var tb = new SolidBrush(Color.FromArgb(170, 255, 255, 255));
                 var size = g.MeasureString(label, font);
-                g.DrawString(label, font, tb, w - size.Width - 12 * s, cy - size.Height / 2);
+                g.DrawString(label, font, tb, stopRect.X - size.Width - 8 * s, cy - size.Height / 2);
+                DrawButtons(g, s);
                 break;
             }
             case BarPhase.Processing:
@@ -171,6 +234,7 @@ sealed class FlowBar : System.Windows.Forms.Form
                     g.FillEllipse(b, left + i * 9 * s, cy - 3 * s, 6 * s, 6 * s);
                 }
                 DrawText(g, message, font, left + 32 * s, cy, Color.White);
+                DrawButtons(g, s);
                 break;
             }
             case BarPhase.Done:
@@ -191,6 +255,34 @@ sealed class FlowBar : System.Windows.Forms.Form
                 DrawText(g, message, font, left + 28 * s, cy, Color.White);
                 break;
             }
+        }
+    }
+
+    /// <summary>■ (Stopp, weiß gefüllt) und ✕ (Abbrechen) als runde Knöpfe; unter der Maus heller.</summary>
+    void DrawButtons(Graphics g, float s)
+    {
+        if (!stopRect.IsEmpty)
+        {
+            using (var b = new SolidBrush(Color.FromArgb(hover == 1 ? 90 : 46, 255, 255, 255))) g.FillEllipse(b, stopRect);
+            float q = 9 * s;
+            using var sq = new GraphicsPath();
+            var r = new RectangleF(stopRect.X + (stopRect.Width - q) / 2, stopRect.Y + (stopRect.Height - q) / 2, q, q);
+            float rad = 2 * s;
+            sq.AddArc(r.X, r.Y, rad * 2, rad * 2, 180, 90);
+            sq.AddArc(r.Right - rad * 2, r.Y, rad * 2, rad * 2, 270, 90);
+            sq.AddArc(r.Right - rad * 2, r.Bottom - rad * 2, rad * 2, rad * 2, 0, 90);
+            sq.AddArc(r.X, r.Bottom - rad * 2, rad * 2, rad * 2, 90, 90);
+            sq.CloseFigure();
+            using var white = new SolidBrush(Color.White);
+            g.FillPath(white, sq);
+        }
+        if (!cancelRect.IsEmpty)
+        {
+            using (var b = new SolidBrush(Color.FromArgb(hover == 2 ? 90 : 46, 255, 255, 255))) g.FillEllipse(b, cancelRect);
+            float cx = cancelRect.X + cancelRect.Width / 2, cy = cancelRect.Y + cancelRect.Height / 2, a = 4.2f * s;
+            using var pen = new Pen(Color.FromArgb(230, 255, 255, 255), 2f * s) { StartCap = LineCap.Round, EndCap = LineCap.Round };
+            g.DrawLine(pen, cx - a, cy - a, cx + a, cy + a);
+            g.DrawLine(pen, cx - a, cy + a, cx + a, cy - a);
         }
     }
 

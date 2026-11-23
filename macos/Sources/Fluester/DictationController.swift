@@ -58,6 +58,13 @@ final class DictationController {
         hotkey.onEscape = { [weak self] in
             MainActor.assumeIsolated { self?.escape() ?? false }
         }
+        // Knöpfe auf der Leiste – falls die Taste mal nicht reagiert
+        bar.model.onStop = { [weak self] in
+            guard let self, self.state == .recording else { return }
+            self.gestures.reset()
+            self.finishRecording()
+        }
+        bar.model.onCancel = { [weak self] in _ = self?.escape() }
         applySettings()
         startHotkey()
     }
@@ -65,11 +72,15 @@ final class DictationController {
     func applySettings() {
         let s = store.s
         hotkey.choice = s.hotkey
+        hotkey.customCode = s.customHotkeyCode
+        bar.model.keyName = s.hotkeyLabel
         gestures.doubleTapEnabled = s.handsFreeDoubleTap
         bar.showWhenIdle = s.showIdleBar
         if hotkey.isRunning { hotkey.start() }
         prewarm()
     }
+
+    func setHotkeySuspended(_ on: Bool) { hotkey.suspended = on }
 
     /// Hotkey braucht die Bedienungshilfen-Freigabe; bis dahin regelmäßig erneut versuchen.
     func startHotkey() {

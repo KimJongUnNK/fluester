@@ -3,8 +3,9 @@ using System.Text.Json.Serialization;
 
 namespace Fluester.Core;
 
-/// <summary>Welche Taste das Diktat auslöst (Windows-Tastaturen melden Fn nicht ans System).</summary>
-public enum HotkeyChoice { RightCtrl, CtrlWin, CapsLock, RightAlt, F8 }
+/// <summary>Welche Taste das Diktat auslöst (Windows-Tastaturen melden Fn nicht ans System).
+/// <see cref="Custom"/>: frei gewählte Taste aus <see cref="Settings.CustomHotkeyCode"/>.</summary>
+public enum HotkeyChoice { RightCtrl, CtrlWin, CapsLock, RightAlt, F8, Custom }
 
 /// <summary>Spracherkennung.</summary>
 public enum EngineChoice
@@ -35,19 +36,20 @@ public static class ChoiceLabels
         HotkeyChoice.CtrlWin => linux ? "Strg + Super" : "Strg + Win",
         HotkeyChoice.CapsLock => "Feststelltaste ⇪",
         HotkeyChoice.RightAlt => "Alt rechts / AltGr",
+        HotkeyChoice.Custom => "Eigene Taste …",
         _ => "F8",
     };
 
     public static string Label(this EngineChoice e) => e switch
     {
         EngineChoice.WhisperLocal => "Whisper lokal (offline, kostenlos)",
-        _ => "Cloud (Groq / OpenAI)",
+        _ => "Cloud (Groq / OpenAI / Mistral …)",
     };
 
     public static string Label(this CleanupChoice c) => c switch
     {
         CleanupChoice.Rules => "Nur Regeln (sofort, offline)",
-        _ => "Sprachmodell (Groq / OpenAI / Ollama)",
+        _ => "Sprachmodell (Claude, GPT, Gemini, Llama …)",
     };
 
     public static string Label(this InsertMethod m) => m == InsertMethod.Paste
@@ -55,18 +57,56 @@ public static class ChoiceLabels
         : "Tippen (langsamer, ohne Zwischenablage)";
 }
 
-/// <summary>Fertige Anbieter-Vorlagen für OpenAI-kompatible Schnittstellen.</summary>
-public sealed record ProviderPreset(string Id, string Name, string BaseUrl, string TranscriptionModel, string ChatModel, bool NeedsKey, string KeyUrl)
+/// <summary>Fertige Anbieter-Vorlagen für OpenAI-kompatible Schnittstellen. <see cref="Transcription"/>: bietet /audio/transcriptions an.
+/// Die Modell-Listen sind Vorschläge – jedes Modell des Anbieters lässt sich eintippen oder per „Modelle laden“ abrufen.</summary>
+public sealed record ProviderPreset(string Id, string Name, string BaseUrl, string TranscriptionModel, string ChatModel, bool NeedsKey, string KeyUrl,
+    bool Transcription = false, string[]? ChatModels = null, string[]? TranscriptionModels = null)
 {
     public static readonly ProviderPreset Groq = new("groq", "Groq (Gratis-Kontingent)", "https://api.groq.com/openai/v1",
-        "whisper-large-v3-turbo", "llama-3.3-70b-versatile", true, "https://console.groq.com/keys");
-    public static readonly ProviderPreset OpenAI = new("openai", "OpenAI", "https://api.openai.com/v1",
-        "gpt-4o-mini-transcribe", "gpt-4o-mini", true, "https://platform.openai.com/api-keys");
+        "whisper-large-v3-turbo", "llama-3.3-70b-versatile", true, "https://console.groq.com/keys", true,
+        new[] { "llama-3.3-70b-versatile", "openai/gpt-oss-120b", "openai/gpt-oss-20b", "llama-3.1-8b-instant" },
+        new[] { "whisper-large-v3-turbo", "whisper-large-v3" });
+    public static readonly ProviderPreset OpenAI = new("openai", "OpenAI (GPT)", "https://api.openai.com/v1",
+        "gpt-4o-mini-transcribe", "gpt-4o-mini", true, "https://platform.openai.com/api-keys", true,
+        new[] { "gpt-4o-mini", "gpt-4.1-mini", "gpt-4.1", "gpt-4o", "gpt-5-mini", "gpt-5" },
+        new[] { "gpt-4o-mini-transcribe", "gpt-4o-transcribe", "whisper-1" });
+    public static readonly ProviderPreset Anthropic = new("anthropic", "Anthropic (Claude)", "https://api.anthropic.com/v1",
+        "", "claude-haiku-5-5", true, "https://console.anthropic.com/settings/keys", false,
+        new[] { "claude-haiku-5-5", "claude-sonnet-5-5", "claude-opus-5-5" });
+    public static readonly ProviderPreset Gemini = new("gemini", "Google Gemini", "https://generativelanguage.googleapis.com/v1beta/openai",
+        "", "gemini-2.5-flash", true, "https://aistudio.google.com/apikey", false,
+        new[] { "gemini-2.5-flash", "gemini-2.5-flash-lite", "gemini-2.5-pro" });
+    public static readonly ProviderPreset Mistral = new("mistral", "Mistral AI", "https://api.mistral.ai/v1",
+        "", "mistral-small-latest", true, "https://console.mistral.ai/api-keys", false,
+        new[] { "mistral-small-latest", "mistral-medium-latest", "mistral-large-latest", "ministral-8b-latest" });
+    public static readonly ProviderPreset DeepSeek = new("deepseek", "DeepSeek", "https://api.deepseek.com/v1",
+        "", "deepseek-chat", true, "https://platform.deepseek.com/api_keys", false,
+        new[] { "deepseek-chat", "deepseek-reasoner" });
+    public static readonly ProviderPreset XAI = new("xai", "xAI (Grok)", "https://api.x.ai/v1",
+        "", "grok-3-mini", true, "https://console.x.ai", false,
+        new[] { "grok-3-mini", "grok-3", "grok-4" });
+    public static readonly ProviderPreset OpenRouter = new("openrouter", "OpenRouter (hunderte Modelle)", "https://openrouter.ai/api/v1",
+        "", "openai/gpt-4o-mini", true, "https://openrouter.ai/keys", false,
+        new[] { "openai/gpt-4o-mini", "google/gemini-2.5-flash", "meta-llama/llama-3.3-70b-instruct", "mistralai/mistral-small-3.2-24b-instruct" });
     public static readonly ProviderPreset Ollama = new("ollama", "Ollama (lokal)", "http://localhost:11434/v1",
-        "", "qwen2.5:7b", false, "https://ollama.com/download");
-    public static readonly ProviderPreset Custom = new("custom", "Eigener Server", "", "", "", false, "");
-    public static readonly ProviderPreset[] All = { Groq, OpenAI, Ollama, Custom };
+        "", "qwen2.5:7b", false, "https://ollama.com/download", false,
+        new[] { "qwen2.5:7b", "llama3.1:8b", "gemma3:4b", "mistral:7b" });
+    public static readonly ProviderPreset LmStudio = new("lmstudio", "LM Studio (lokal)", "http://localhost:1234/v1",
+        "", "qwen2.5-7b-instruct", false, "https://lmstudio.ai", false,
+        new[] { "qwen2.5-7b-instruct", "llama-3.1-8b-instruct", "gemma-3-4b-it" });
+    public static readonly ProviderPreset Custom = new("custom", "Eigener Server", "", "", "", false, "", true);
+    public static readonly ProviderPreset[] All = { Groq, OpenAI, Anthropic, Gemini, Mistral, DeepSeek, XAI, OpenRouter, Ollama, LmStudio, Custom };
     public static ProviderPreset ById(string? id) => All.FirstOrDefault(p => p.Id == id) ?? Groq;
+
+    /// <summary>Anbieter für die Spracherkennung bzw. für die KI-Bereinigung.</summary>
+    public static ProviderPreset[] For(bool transcription) => transcription ? All.Where(p => p.Transcription).ToArray() : All;
+
+    /// <summary>Modell-Vorschläge; das aktuelle Modell steht immer mit drin.</summary>
+    public string[] Suggestions(bool transcription, string? current = null)
+    {
+        var list = (transcription ? TranscriptionModels : ChatModels) ?? Array.Empty<string>();
+        return string.IsNullOrWhiteSpace(current) || list.Contains(current) ? list : list.Prepend(current).ToArray();
+    }
 }
 
 /// <summary>Verbindung zu einer OpenAI-kompatiblen API. Der Schlüssel liegt verschlüsselt separat, nicht hier.</summary>
@@ -116,6 +156,10 @@ public sealed class Settings
 
     // Bedienung
     public HotkeyChoice Hotkey { get; set; } = HotkeyChoice.RightCtrl;
+    /// <summary>Eigene Taste (<see cref="HotkeyChoice.Custom"/>): Windows virtueller Tastencode, Linux evdev-Code.</summary>
+    public int CustomHotkeyCode { get; set; }
+    /// <summary>Anzeigename der eigenen Taste, z. B. „F13“ oder „Pause“.</summary>
+    public string CustomHotkeyName { get; set; } = "";
     public bool HandsFreeDoubleTap { get; set; } = true;
     public bool CommandModeEnabled { get; set; } = true;
     public bool Sounds { get; set; } = true;
@@ -154,6 +198,10 @@ public sealed class Settings
     public List<DictionaryEntry> Dictionary { get; set; } = new();
     public List<Snippet> Snippets { get; set; } = new();
     public StyleSettings Styles { get; set; } = new();
+
+    /// <summary>Name der Diktat-Taste für Hinweise – bei eigener Taste ihr Name.</summary>
+    public string HotkeyLabel(bool linux = false) =>
+        Hotkey == HotkeyChoice.Custom ? (CustomHotkeyName.Length > 0 ? CustomHotkeyName : $"Taste {CustomHotkeyCode}") : Hotkey.Label(linux);
 
     /// <summary>Sprache als Klartext für Prompts.</summary>
     [JsonIgnore]
@@ -201,6 +249,9 @@ public sealed class Settings
             s.MicrophoneName ??= "";
             s.PasteShortcut ??= "auto";
             s.WhisperModelId ??= "turbo-q5";
+            s.CustomHotkeyName ??= "";
+            // Eigene Taste ohne Tastencode (Datei von Hand bearbeitet) → Standard, sonst reagiert keine Taste
+            if (s.Hotkey == HotkeyChoice.Custom && s.CustomHotkeyCode <= 0) s.Hotkey = HotkeyChoice.RightCtrl;
             s.CloudTranscription.BaseUrl ??= "";
             s.CloudTranscription.Model ??= "";
             s.CloudTranscription.ProviderId ??= "groq";

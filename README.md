@@ -34,7 +34,7 @@ Lieber von Hand? Alle Dateien liegen unter **[Releases](https://github.com/KimJo
 
 ## Was Flüster kann
 
-- **Überall diktieren:** Taste halten zum Sprechen, doppelt tippen für freihändig, Esc bricht ab.
+- **Überall diktieren:** Taste halten zum Sprechen, doppelt tippen für freihändig, Esc bricht ab. Jede Taste ohne Zeichen lässt sich als Diktat-Taste festlegen (F13, Pause, Makrotaste …). Auf der Leiste stoppt ■ die Aufnahme, ✕ verwirft sie.
 - **Saubere Texte:** Füllwörter und Stotterer raus, Selbstkorrekturen übernehmen, „neue Zeile“ als Befehl, Aufzählungen als Liste.
 - **Command Mode:** Text markieren, Taste + Zusatztaste halten und „mach das förmlicher“ oder „übersetz das ins Englische“ sagen.
 - **Stil je App:** locker im Chat, förmlich in der Mail.
@@ -46,12 +46,12 @@ Lieber von Hand? Alle Dateien liegen unter **[Releases](https://github.com/KimJo
 
 | | macOS | Windows | Linux |
 | --- | --- | --- | --- |
-| Diktat-Taste | **Fn / 🌐** (oder rechte ⌥ ⌘ ⌃) | **Strg rechts** (oder Strg+Win, ⇪, Alt rechts, F8) | **Strg rechts** (oder Strg+Super, ⇪, Alt rechts, F8) |
+| Diktat-Taste | **Fn / 🌐** (oder rechte ⌥ ⌘ ⌃, oder eigene Taste) | **Strg rechts** (oder Strg+Win, ⇪, Alt rechts, F8, oder eigene Taste) | **Strg rechts** (oder Strg+Super, ⇪, Alt rechts, F8, oder eigene Taste) |
 | Zusatz für Command Mode | ⌃ | Umschalt | Umschalt |
 | Oberfläche | Menüleiste, Flow-Leiste, Einstellungen | App-Fenster mit Seitenleiste (Startmenü), Infobereich, Flow-Leiste | App-Fenster mit Seitenleiste (GTK 4/libadwaita, App-Menü), Flow-Leiste (X11/Xwayland), Hintergrunddienst |
 | Erkennung offline | Apple SpeechAnalyzer, whisper.cpp | whisper.cpp in der App (Grafikkarte über Vulkan) | whisper.cpp im Dienst (Grafikkarte über Vulkan) |
 | Erkennung Cloud | Groq, OpenAI, eigener Server | Groq, OpenAI, eigener Server | Groq, OpenAI, eigener Server |
-| KI-Bereinigung | Apple Intelligence, Groq/OpenAI/Ollama, Regeln | Groq/OpenAI/Ollama, Regeln | Groq/OpenAI/Ollama, Regeln |
+| KI-Bereinigung | Apple Intelligence, Claude, GPT, Gemini, Mistral, DeepSeek, Grok, Groq, OpenRouter, Ollama, LM Studio, Regeln | Claude, GPT, Gemini, Mistral, DeepSeek, Grok, Groq, OpenRouter, Ollama, LM Studio, Regeln | Claude, GPT, Gemini, Mistral, DeepSeek, Grok, Groq, OpenRouter, Ollama, LM Studio, Regeln |
 | Getestet | automatisch in der CI und von Hand auf einem Mac mini | automatisch in der CI (Taste, Einfügen, Erkennung) | automatisch in der CI (Taste, Zwischenablage, Erkennung, jede Seite des Fensters) |
 
 ## Datenschutz
