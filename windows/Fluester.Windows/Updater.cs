@@ -68,7 +68,17 @@ static class Updater
             if (Get-Process -Id $ProcessId -ErrorAction SilentlyContinue) { Stop-Process -Id $ProcessId -Force; Start-Sleep -Milliseconds 500 }
             $out = Join-Path $work 'neu'
             if (Test-Path $out) { Remove-Item $out -Recurse -Force }
-            Expand-Archive -Path $Zip -DestinationPath $out -Force
+            # Entpacken: .NET-ZipFile direkt (Expand-Archive scheitert je nach Modulversion), sonst tar.exe von Windows
+            try {
+                Add-Type -AssemblyName System.IO.Compression.FileSystem
+                [System.IO.Compression.ZipFile]::ExtractToDirectory($Zip, $out)
+            } catch {
+                Log ('ZipFile fehlgeschlagen, nehme tar: ' + $_)
+                if (Test-Path $out) { Remove-Item $out -Recurse -Force }
+                New-Item -ItemType Directory -Path $out -Force | Out-Null
+                & "$env:SystemRoot\System32\tar.exe" -xf $Zip -C $out
+                if ($LASTEXITCODE -ne 0) { throw ('tar fehlgeschlagen: ' + $LASTEXITCODE) }
+            }
             if (-not (Test-Path (Join-Path $out 'Fluester.exe'))) { throw 'Fluester.exe fehlt im Paket' }
             if (Test-Path $old) { Remove-Item $old -Recurse -Force }
             # Umbenennen kann kurz scheitern (Virenscanner, Explorer) - ein paar Mal versuchen
