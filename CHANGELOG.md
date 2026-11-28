@@ -2,6 +2,10 @@
 
 Alle wichtigen Änderungen an Flüster. Versionen folgen [Semantic Versioning](https://semver.org/lang/de/).
 
+## [1.4.1] – 2026-11-28
+
+- **Mac – nach jedem Update erneut Bedienungshilfen erlauben:** Jede Version hatte eine eigene Signatur, macOS hielt sie für eine neue App – die Freigabe galt nicht mehr und das Willkommensfenster kam wieder. Ab jetzt ist die Signatur an die App-Kennung gebunden, die Freigaben bleiben bei Updates erhalten. Einmal (beim Update auf 1.4.1) fragt macOS noch neu, danach nicht mehr.
+
 ## [1.4.0] – 2026-11-23
 
 Knöpfe auf der Leiste, eigene Diktat-Taste und viel mehr KI-Anbieter.

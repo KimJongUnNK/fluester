@@ -92,6 +92,9 @@ jobs:
           test ! -e "$T/Flüster.app.alt"
           [ "$(find "$T" -maxdepth 1 -name '*.app' | wc -l | tr -d ' ')" = 1 ]
           codesign --verify "$T/Flüster.app"
+          # Gleiche Signatur-Anforderung → Bedienungshilfen-Freigabe bleibt (kein Zurücksetzen)
+          codesign -d -r- "$T/Flüster.app" 2>&1 | grep -q 'designated => identifier "app.fluester.mac"'
+          ! grep -q "neu erfragt" "$LOG"
           sleep 3; pkill -x Fluester || true
           echo "✓ an Ort und Stelle ersetzt, keine zweite Kopie"
 

@@ -137,6 +137,8 @@ final class AppUpdater: ObservableObject {
             #!/bin/bash
             PID="$1"; DEST="$2"; NEW="$3"; ID="$4"; LOG="$5"; ADMIN="$6"; WORK="$7"
             log() { echo "$(date '+%Y-%m-%d %H:%M:%S') Update: $*" >> "$LOG"; }
+            # Anforderung der alten Signatur merken: Freigaben nur zurücksetzen, wenn sie sich ändert
+            OLDREQ=$(codesign -d -r- "$DEST" 2>&1 | grep 'designated =>')
             # Warten, bis Flüster beendet ist
             for _ in $(seq 150); do kill -0 "$PID" 2>/dev/null || break; sleep 0.2; done
             kill -0 "$PID" 2>/dev/null && { kill "$PID"; sleep 1; }
@@ -152,8 +154,13 @@ final class AppUpdater: ObservableObject {
             if ersetzen; then
               log "fertig: $DEST"
               xattr -dr com.apple.quarantine "$DEST" 2>/dev/null
-              # Neue Signatur – die alte Bedienungshilfen-Freigabe passt nicht mehr, macOS soll sauber neu fragen
-              tccutil reset Accessibility "$ID" >/dev/null 2>&1
+              NEWREQ=$(codesign -d -r- "$DEST" 2>&1 | grep 'designated =>')
+              # Seit 1.4.1 bleibt die Anforderung gleich (Bundle-ID) – die Freigabe gilt weiter. Nur wenn sie sich
+              # ändert (Update von einer älteren Version), passt die alte Freigabe nicht mehr: dann sauber neu fragen.
+              if [ "$OLDREQ" != "$NEWREQ" ]; then
+                log "Signatur-Anforderung geändert – Bedienungshilfen werden neu erfragt"
+                tccutil reset Accessibility "$ID" >/dev/null 2>&1
+              fi
             else
               log "fehlgeschlagen – alte Version bleibt"
             fi
