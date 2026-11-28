@@ -38,7 +38,12 @@ done
 iconutil -c icns "$ICONSET" -o "$APP/Contents/Resources/AppIcon.icns"
 
 echo "▶︎ Signieren (ad hoc) …"
-codesign --force --sign - --entitlements Resources/Fluester.entitlements --options runtime "$APP"
+# Feste Anforderung „Bundle-ID app.fluester.mac“ statt des Hashes jeder einzelnen Version: Damit gilt die
+# Bedienungshilfen- und Mikrofon-Freigabe auch nach einem Update weiter (sonst fragt macOS jedes Mal neu).
+codesign --force --sign - --entitlements Resources/Fluester.entitlements --options runtime \
+  --requirements '=designated => identifier "app.fluester.mac"' "$APP"
+codesign -d -r- "$APP" 2>&1 | grep -q 'designated => identifier "app.fluester.mac"' \
+  || { echo "✗ Signatur ohne feste Anforderung"; exit 1; }
 codesign --verify --verbose=1 "$APP"
 
 echo "▶︎ ZIP …"
